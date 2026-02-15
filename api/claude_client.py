@@ -7,19 +7,18 @@ from typing import Any
 
 from config import MODELS, DEFAULT_MODEL
 from core.token_tracker import UsageInfo
+from data.database import db
 
 log = logging.getLogger(__name__)
-
 
 @dataclass
 class StreamEvent:
     """A streaming event from the API."""
-    type: str                 # "text", "thinking", "usage", "error", "done"
+    type: str  # "text", "thinking", "usage", "error", "done"
     text: str = ""
     usage: UsageInfo | None = None
     error: str = ""
     stop_reason: str = ""
-
 
 class ClaudeClient:
     """Wrapper around the Anthropic Python SDK."""
@@ -56,19 +55,11 @@ class ClaudeClient:
         model: str = DEFAULT_MODEL,
         max_tokens: int = 8192,
         thinking: dict | None = None,
+        project_id: str = "",           # 新增：用于记录日志
+        conversation_id: str = "",      # 新增：用于记录日志
     ):
         """
         Send a message and yield StreamEvent objects.
-        
-        Args:
-            messages: Conversation history in Messages API format.
-            system_content: System prompt as list of content blocks (with cache_control).
-            model: Model ID string.
-            max_tokens: Maximum output tokens.
-            thinking: Optional thinking config {"type": "enabled", "budget_tokens": N}.
-        
-        Yields:
-            StreamEvent objects for text deltas, thinking, usage, and completion.
         """
         if not self.is_configured:
             yield StreamEvent(type="error", error="API client not configured. Set your API key in Settings.")
@@ -96,7 +87,6 @@ class ClaudeClient:
             }
             if thinking:
                 kwargs["thinking"] = thinking
-                # Extended thinking requires higher max_tokens
                 budget = thinking.get("budget_tokens", 1024)
                 kwargs["max_tokens"] = max(max_tokens, budget + 4096)
 
@@ -136,6 +126,20 @@ class ClaudeClient:
                         cache_creation_tokens=getattr(u, "cache_creation_input_tokens", 0),
                         cache_read_tokens=getattr(u, "cache_read_input_tokens", 0),
                     )
+                    
+                    # 记录到api_call_log（新增）
+                    if project_id and conversation_id:
+                        try:
+                            db.execute("""
+                                INSERT INTO api_call_log 
+                                (project_id, conversation_id, model_id, cache_read_tokens, cache_creation_tokens, input_tokens)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            """, (project_id, conversation_id, model, 
+                                  usage.cache_read_tokens, usage.cache_creation_tokens, usage.input_tokens))
+                            log.debug("Logged API call to cache tracker")
+                        except Exception as e:
+                            log.warning("Failed to log API call: %s", e)
+                    
                     log.info(
                         "API response: %d input, %d output, %d cache_write, %d cache_read, stop=%s",
                         usage.input_tokens, usage.output_tokens,
@@ -143,12 +147,12 @@ class ClaudeClient:
                         getattr(final, "stop_reason", "?"),
                     )
 
-            yield StreamEvent(
-                type="done",
-                text=full_text,
-                usage=usage,
-                stop_reason=getattr(final, "stop_reason", "") if final else "",
-            )
+                yield StreamEvent(
+                    type="done",
+                    text=full_text,
+                    usage=usage,
+                    stop_reason=getattr(final, "stop_reason", "") if final else "",
+                )
 
         except anthropic.AuthenticationError as e:
             log.error("Authentication failed: %s", e)
@@ -165,7 +169,7 @@ class ClaudeClient:
         except anthropic.APIConnectionError as e:
             log.error("Connection error: %s", e)
             yield StreamEvent(type="error",
-                              error="Cannot connect to Anthropic API. Check your network/proxy settings.")
+                             error="Cannot connect to Anthropic API. Check your network/proxy settings.")
 
         except Exception as e:
             log.exception("Unexpected error during API call")
@@ -177,7 +181,6 @@ class ClaudeClient:
             return False, "API key not configured"
         try:
             import anthropic
-            # Minimal API call to test
             response = self._client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=10,

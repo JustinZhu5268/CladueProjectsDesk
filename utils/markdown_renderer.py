@@ -5,6 +5,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
+
 def render_markdown(text: str) -> str:
     """Convert markdown text to styled HTML fragment."""
     try:
@@ -30,106 +31,183 @@ def render_markdown(text: str) -> str:
         import html as html_mod
         return f"<pre>{html_mod.escape(text)}</pre>"
 
+
+def escape_js_string(text: str) -> str:
+    """Escape string for safe JavaScript embedding."""
+    if not isinstance(text, str):
+        text = str(text)
+    # 顺序很重要：先转义反斜杠，再转义其他
+    return (text
+        .replace("\\", "\\\\")  # 必须先转义反斜杠
+        .replace("'", "\\'")     # 单引号
+        .replace('"', '\\"')     # 双引号
+        .replace("\n", "\\n")    # 换行
+        .replace("\r", "")       # 回车删除
+        .replace("</script>", "<\\/script>"))  # 防止闭合script
+
+
 def get_chat_html_template(dark_mode: bool = True) -> str:
-    """Get the full HTML template for the chat WebEngineView."""
-    bg = "#1E1E1E" if dark_mode else "#FFFFFF"
-    text_color = "#E5E5E5" if dark_mode else "#1A1A1A"
-    user_bg = "#2A3A4A" if dark_mode else "#E8F0FE"
-    assist_bg = "#2D2D2D" if dark_mode else "#F8F8F8"
-    code_bg = "#1A1A1A" if dark_mode else "#F5F5F5"
+    """Generate chat HTML template with embedded JavaScript."""
+    colors = {
+        "bg": "#1E1E1E" if dark_mode else "#FFFFFF",
+        "text": "#E5E5E5" if dark_mode else "#1A1A1A",
+        "user_bg": "#2A3A4A" if dark_mode else "#E8F0FE",
+        "assist_bg": "#2D2D2D" if dark_mode else "#F8F8F8",
+        "code_bg": "#1A1A1A" if dark_mode else "#F5F5F5",
+        "meta": "#888888",
+        "uid": "#666666"
+    }
     
-    return f"""<!DOCTYPE html>
+    # 使用%s占位符避免f-string转义地狱
+    html_template = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<style>
-    body {{
-        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-        background: {bg};
-        color: {text_color};
-        margin: 0;
-        padding: 20px;
-        line-height: 1.6;
-    }}
-    .message {{
-        margin: 12px 0;
-        padding: 12px 16px;
-        border-radius: 12px;
-        max-width: 85%;
-        word-wrap: break-word;
-    }}
-    .user {{
-        background: {user_bg};
-        margin-left: auto;
-        text-align: right;
-    }}
-    .assistant {{
-        background: {assist_bg};
-        margin-right: auto;
-    }}
-    .meta {{
-        font-size: 11px;
-        color: #888;
-        margin-top: 6px;
-    }}
-    pre {{
-        background: {code_bg};
-        padding: 12px;
-        border-radius: 6px;
-        overflow-x: auto;
-    }}
-    #stream {{
-        display: none;
-        background: {assist_bg};
-    }}
+<style type="text/css">
+body { 
+    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; 
+    background: %(bg)s; 
+    color: %(text)s; 
+    margin: 0; 
+    padding: 20px; 
+    line-height: 1.6; 
+}
+.message { 
+    margin: 12px 0; 
+    padding: 12px 16px; 
+    border-radius: 12px; 
+    max-width: 85%%; 
+    word-wrap: break-word; 
+    position: relative; 
+}
+.user { 
+    background: %(user_bg)s; 
+    margin-left: auto; 
+    text-align: right; 
+}
+.assistant { 
+    background: %(assist_bg)s; 
+    margin-right: auto; 
+}
+.meta { 
+    font-size: 11px; 
+    color: %(meta)s; 
+    margin-top: 6px; 
+    cursor: pointer; 
+}
+.uid { 
+    font-family: Consolas, monospace; 
+    font-size: 10px; 
+    color: %(uid)s; 
+    margin-left: 8px; 
+}
+pre { 
+    background: %(code_bg)s; 
+    padding: 12px; 
+    border-radius: 6px; 
+    overflow-x: auto; 
+}
+code { 
+    font-family: "Cascadia Code", Consolas, monospace; 
+}
+#stream { 
+    display: none; 
+    background: %(assist_bg)s; 
+}
 </style>
 </head>
 <body>
 <div id="chat"></div>
 <div id="stream" class="message assistant">
-    <span id="stream-text"></span><span style="opacity:0.5;">▌</span>
+    <span id="stream-text"></span>
+    <span style="opacity:0.5;">&#9646;</span>
 </div>
 
-<script>
-function addMessage(role, html, meta) {{
-    const chat = document.getElementById('chat');
-    const div = document.createElement('div');
-    div.className = 'message ' + role;
-    div.innerHTML = html;
-    if (meta) {{
-        const m = document.createElement('div');
-        m.className = 'meta';
-        m.textContent = meta;
-        div.appendChild(m);
-    }}
-    chat.appendChild(div);
-    window.scrollTo(0, document.body.scrollHeight);
-}}
+<script type="text/javascript">
+// Global message storage
+var messageStore = {};
 
-function startStreaming() {{
-    const s = document.getElementById('stream');
-    s.style.display = 'block';
+// Core function: Add a message to chat
+function addMessage(role, htmlContent, metaInfo, uid) {
+    var chatContainer = document.getElementById('chat');
+    var msgDiv = document.createElement('div');
+    msgDiv.className = 'message ' + role;
+    
+    if (uid && uid.length > 0) {
+        msgDiv.id = 'msg-' + uid;
+    }
+    
+    msgDiv.innerHTML = htmlContent;
+    
+    // Add metadata line
+    if (metaInfo || uid) {
+        var metaDiv = document.createElement('div');
+        metaDiv.className = 'meta';
+        
+        var metaText = metaInfo || '';
+        if (uid && uid.length > 0) {
+            metaText += '<span class="uid">#' + uid.substring(0, 8) + '</span>';
+            messageStore[uid] = {
+                role: role,
+                content: htmlContent,
+                meta: metaInfo
+            };
+        }
+        
+        metaDiv.innerHTML = metaText;
+        msgDiv.appendChild(metaDiv);
+    }
+    
+    chatContainer.appendChild(msgDiv);
+    window.scrollTo(0, document.body.scrollHeight);
+    return true;
+}
+
+// Start streaming mode
+function startStreaming() {
+    var streamDiv = document.getElementById('stream');
+    streamDiv.style.display = 'block';
     document.getElementById('stream-text').innerHTML = '';
     window.scrollTo(0, document.body.scrollHeight);
-}}
+}
 
-function appendStreamText(html) {{
-    document.getElementById('stream-text').innerHTML = html;
+// Append text during streaming
+function appendStreamText(htmlContent) {
+    document.getElementById('stream-text').innerHTML = htmlContent;
     window.scrollTo(0, document.body.scrollHeight);
-}}
+}
 
-function finishStreaming(html, meta) {{
+// Finish streaming and add final message
+function finishStreaming(htmlContent, metaInfo, uid) {
     document.getElementById('stream').style.display = 'none';
-    addMessage('assistant', html, meta);
-}}
+    addMessage('assistant', htmlContent, metaInfo, uid);
+}
 
-function addError(msg) {{
-    const chat = document.getElementById('chat');
-    const div = document.createElement('div');
-    div.style.cssText = 'color:#E74C3C;background:#FADBD8;padding:10px;border-radius:6px;margin:10px 0;';
-    div.textContent = msg;
-    chat.appendChild(div);
-}}
+// Add error message
+function addError(errorMsg) {
+    var chatContainer = document.getElementById('chat');
+    var errorDiv = document.createElement('div');
+    errorDiv.style.cssText = 'color:#E74C3C;background:#FADBD8;padding:10px;border-radius:6px;margin:10px 0;';
+    errorDiv.textContent = errorMsg;
+    chatContainer.appendChild(errorDiv);
+    window.scrollTo(0, document.body.scrollHeight);
+}
+
+// Clear all messages
+function clearChat() {
+    document.getElementById('chat').innerHTML = '';
+    messageStore = {};
+}
+
+// Expose to window for safety
+window.addMessage = addMessage;
+window.startStreaming = startStreaming;
+window.appendStreamText = appendStreamText;
+window.finishStreaming = finishStreaming;
+window.addError = addError;
+window.clearChat = clearChat;
 </script>
 </body>
-</html>"""
+</html>""" % colors
+    
+    return html_template

@@ -1,10 +1,9 @@
 """Main application window with three-panel layout."""
 from __future__ import annotations
-
+from utils.markdown_renderer import render_markdown, get_chat_html_template, escape_js_string
 import os
 import sys
 import base64
-import asyncio
 import logging
 from pathlib import Path
 from functools import partial
@@ -33,23 +32,21 @@ from api.claude_client import ClaudeClient, StreamEvent
 from utils.key_manager import KeyManager
 from utils.markdown_renderer import render_markdown, get_chat_html_template
 from ui.settings_dialog import SettingsDialog
+from data.database import db
 
 log = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════
-# API Worker Thread
-# ═══════════════════════════════════════════════════════
-
 class APIWorker(QThread):
     """Background thread for API calls."""
-    text_delta = Signal(str)        # streaming text
-    thinking_delta = Signal(str)    # streaming thinking
-    finished = Signal(str, str, object)  # full_text, thinking_text, UsageInfo
+    text_delta = Signal(str)
+    thinking_delta = Signal(str)
+    finished = Signal(str, str, object)
     error = Signal(str)
 
     def __init__(self, client: ClaudeClient, messages: list, system: list,
-                 model: str, max_tokens: int, thinking: dict | None = None):
+                 model: str, max_tokens: int, thinking: dict | None = None,
+                 project_id: str = "", conversation_id: str = ""):
         super().__init__()
         self.client = client
         self.messages = messages
@@ -57,6 +54,8 @@ class APIWorker(QThread):
         self.model = model
         self.max_tokens = max_tokens
         self.thinking_cfg = thinking
+        self.project_id = project_id
+        self.conversation_id = conversation_id
         self._cancelled = False
 
     def run(self):
@@ -70,6 +69,8 @@ class APIWorker(QThread):
                 model=self.model,
                 max_tokens=self.max_tokens,
                 thinking=self.thinking_cfg,
+                project_id=self.project_id,
+                conversation_id=self.conversation_id,
             ):
                 if self._cancelled:
                     log.info("Streaming cancelled by user")
@@ -97,10 +98,6 @@ class APIWorker(QThread):
         self._cancelled = True
 
 
-# ═══════════════════════════════════════════════════════
-# Main Window
-# ═══════════════════════════════════════════════════════
-
 class MainWindow(QMainWindow):
     """Three-panel main application window."""
 
@@ -110,7 +107,6 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
         self.resize(1300, 800)
 
-        # Core managers
         self.project_mgr = ProjectManager()
         self.conv_mgr = ConversationManager()
         self.doc_processor = DocumentProcessor()
@@ -119,7 +115,6 @@ class MainWindow(QMainWindow):
         self.key_manager = KeyManager()
         self.client = ClaudeClient()
 
-        # State
         self.current_project: Project | None = None
         self.current_conv: Conversation | None = None
         self.worker: APIWorker | None = None
@@ -128,12 +123,11 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._setup_shortcuts()
+        self._setup_context_menu()
         self._init_client()
         self._refresh_projects()
 
         log.info("Main window initialized")
-
-    # ── UI Construction ────────────────────────────────
 
     def _build_ui(self):
         central = QWidget()
@@ -142,8 +136,6 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ── Top Bar ────────────────────────────
-                # ── Top Bar ────────────────────────────
         top_bar = QFrame()
         top_bar.setStyleSheet("""
             QFrame { 
@@ -157,35 +149,17 @@ class MainWindow(QMainWindow):
         top_layout.setContentsMargins(12, 6, 12, 6)
 
         top_layout.addWidget(QLabel("Model:"))
-        # 在self.model_combo创建后添加：
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(280)
-
-        # 确保MODELS已导入并检查
-        if not MODELS:
-            log.error("MODELS is empty!")
-            self.model_combo.addItem("Error: No models", "none")
-        else:
-            for mid, minfo in MODELS.items():
-                display_text = f"{minfo.display_name} ${minfo.input_price}/${minfo.output_price}"
-                self.model_combo.addItem(display_text, mid)
-                log.debug(f"Added model: {display_text}")
-
-        # 显式设置当前索引
-        idx = self.model_combo.findData(DEFAULT_MODEL)
-        if idx >= 0:
-            self.model_combo.setCurrentIndex(idx)
-        else:
-            self.model_combo.setCurrentIndex(0)
-            
+        
         for mid, minfo in MODELS.items():
-            self.model_combo.addItem(
-                f"{minfo.display_name}  ${minfo.input_price}/${minfo.output_price}",
-                mid,
-            )
-        # Default to Sonnet 4.5
-        idx = list(MODELS.keys()).index(DEFAULT_MODEL) if DEFAULT_MODEL in MODELS else 0
-        self.model_combo.setCurrentIndex(idx)
+            display_text = f"{minfo.display_name} ${minfo.input_price}/${minfo.output_price}"
+            self.model_combo.addItem(display_text, mid)
+        
+        default_idx = self.model_combo.findData(DEFAULT_MODEL)
+        self.model_combo.setCurrentIndex(default_idx if default_idx >= 0 else 0)
+        
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         top_layout.addWidget(self.model_combo)
 
         top_layout.addSpacing(20)
@@ -193,13 +167,30 @@ class MainWindow(QMainWindow):
         self.thinking_check = QCheckBox("Extended Thinking")
         top_layout.addWidget(self.thinking_check)
 
-        top_layout.addWidget(QLabel("Budget:"))
+        thinking_budget_layout = QHBoxLayout()
         self.thinking_budget = QComboBox()
-        self.thinking_budget.addItems(["1024", "2048", "4096", "8192", "16384"])
-        self.thinking_budget.setCurrentIndex(2)
         self.thinking_budget.setEnabled(False)
+        
+        self.thinking_budget.addItem("1024 — 快速推理", 1024)
+        self.thinking_budget.addItem("2048 — 标准分析 (推荐)", 2048)
+        self.thinking_budget.addItem("4096 — 深度思考", 4096)
+        self.thinking_budget.addItem("8192 — 复杂问题", 8192)
+        self.thinking_budget.addItem("16384 — 极限推理", 16384)
+        self.thinking_budget.setCurrentIndex(1)
+        
+        self.thinking_recommend_label = QLabel("")
+        self.thinking_recommend_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.thinking_recommend_label.setVisible(False)
+        
+        thinking_budget_layout.addWidget(QLabel("Budget:"))
+        thinking_budget_layout.addWidget(self.thinking_budget)
+        thinking_budget_layout.addWidget(self.thinking_recommend_label, 1)
+        
         self.thinking_check.toggled.connect(self.thinking_budget.setEnabled)
-        top_layout.addWidget(self.thinking_budget)
+        self.thinking_check.toggled.connect(self._on_thinking_toggled)
+        
+        top_layout.addLayout(thinking_budget_layout)
+        top_layout.addSpacing(20)
 
         top_layout.addStretch()
 
@@ -209,18 +200,15 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(top_bar)
 
-        # ── Three Panels ───────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # LEFT: Sidebar
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(4, 4, 4, 4)
         left_layout.setSpacing(4)
 
-        # Projects section
         proj_header = QHBoxLayout()
-        proj_header.addWidget(QLabel("<b>Projects</b>"))
+        proj_header.addWidget(QLabel(" **Projects**"))
         btn_new_proj = QPushButton("+")
         btn_new_proj.setFixedSize(28, 28)
         btn_new_proj.setToolTip("New Project (Ctrl+Shift+N)")
@@ -235,14 +223,12 @@ class MainWindow(QMainWindow):
         self.project_list.customContextMenuRequested.connect(self._project_context_menu)
         left_layout.addWidget(self.project_list)
 
-        # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         left_layout.addWidget(sep)
 
-        # Conversations section
         conv_header = QHBoxLayout()
-        conv_header.addWidget(QLabel("<b>Conversations</b>"))
+        conv_header.addWidget(QLabel(" **Conversations**"))
         btn_new_conv = QPushButton("+")
         btn_new_conv.setFixedSize(28, 28)
         btn_new_conv.setToolTip("New Conversation (Ctrl+N)")
@@ -259,18 +245,15 @@ class MainWindow(QMainWindow):
         left_panel.setFixedWidth(SIDEBAR_WIDTH)
         splitter.addWidget(left_panel)
 
-        # CENTER: Chat
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(0)
 
         self.chat_view = QWebEngineView()
-        self.chat_view.setHtml(get_chat_html_template())
+        self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
         center_layout.addWidget(self.chat_view, 1)
 
-        # Input area
-                # Input area
         input_frame = QFrame()
         input_frame.setStyleSheet("""
             QFrame { 
@@ -281,7 +264,6 @@ class MainWindow(QMainWindow):
         input_layout = QVBoxLayout(input_frame)
         input_layout.setContentsMargins(12, 8, 12, 8)
 
-        # Token estimate
         self.token_label = QLabel("")
         self.token_label.setStyleSheet("color: #999; font-size: 11px;")
         input_layout.addWidget(self.token_label)
@@ -291,6 +273,7 @@ class MainWindow(QMainWindow):
         self.input_box.setPlaceholderText("Type your message... (Ctrl+Enter to send)")
         self.input_box.setMaximumHeight(120)
         self.input_box.setAcceptRichText(False)
+        self.input_box.textChanged.connect(self._recommend_thinking_budget)
         input_row.addWidget(self.input_box, 1)
 
         btn_col = QVBoxLayout()
@@ -311,13 +294,12 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(input_frame)
         splitter.addWidget(center_panel)
 
-        # RIGHT: Project Details Panel
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(8, 8, 8, 8)
         right_layout.setSpacing(8)
 
-        right_layout.addWidget(QLabel("<b>System Prompt</b>"))
+        right_layout.addWidget(QLabel(" **System Prompt**"))
         self.system_prompt_edit = QPlainTextEdit()
         self.system_prompt_edit.setPlaceholderText("Enter custom instructions for this project...")
         self.system_prompt_edit.setMaximumHeight(150)
@@ -331,9 +313,8 @@ class MainWindow(QMainWindow):
         sep2.setFrameShape(QFrame.Shape.HLine)
         right_layout.addWidget(sep2)
 
-        # Documents
         doc_header = QHBoxLayout()
-        doc_header.addWidget(QLabel("<b>Documents</b>"))
+        doc_header.addWidget(QLabel(" **Documents**"))
         btn_upload = QPushButton("Upload")
         btn_upload.clicked.connect(self._upload_document)
         doc_header.addWidget(btn_upload)
@@ -352,8 +333,7 @@ class MainWindow(QMainWindow):
         sep3.setFrameShape(QFrame.Shape.HLine)
         right_layout.addWidget(sep3)
 
-        # Stats
-        right_layout.addWidget(QLabel("<b>Token Stats</b>"))
+        right_layout.addWidget(QLabel(" **Token Stats**"))
         self.stats_label = QLabel("No conversation selected")
         self.stats_label.setWordWrap(True)
         self.stats_label.setStyleSheet("color: #666; font-size: 12px;")
@@ -369,25 +349,54 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(2, 0)
         main_layout.addWidget(splitter, 1)
 
-        # ── Status Bar ─────────────────────────
         self.statusBar().showMessage("Ready")
-
-        # ── Pending attachments ────────────────
         self.pending_attachments: list[dict] = []
 
     def _setup_shortcuts(self):
-        """Configure keyboard shortcuts."""
         QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self._send_message)
         QShortcut(QKeySequence("Ctrl+N"), self).activated.connect(self._new_conversation)
         QShortcut(QKeySequence("Ctrl+Shift+N"), self).activated.connect(self._new_project)
         QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(self._open_settings)
         QShortcut(QKeySequence("Ctrl+L"), self).activated.connect(self.input_box.setFocus)
         QShortcut(QKeySequence("Escape"), self).activated.connect(self._cancel_streaming)
-
-    # ── Initialization ─────────────────────────────────
+    
+    def _setup_context_menu(self):
+        """Setup context menu for chat view to copy UID."""
+        self.chat_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.chat_view.customContextMenuRequested.connect(self._chat_context_menu)
+    
+    def _chat_context_menu(self, pos):
+        """Show context menu in chat area."""
+        js_code = f"""
+            (function() {{
+                var el = document.elementFromPoint({pos.x()}, {pos.y()});
+                if (!el) return null;
+                var msg = el.closest('.message');
+                return msg ? msg.id : null;
+            }})()
+        """
+        self.chat_view.page().runJavaScript(js_code, self._show_chat_menu_callback)
+    
+    def _show_chat_menu_callback(self, element_id):
+        """Callback with element ID."""
+        if not element_id or not element_id.startswith('msg-'):
+            return
+        
+        uid = element_id.replace('msg-', '')
+        menu = QMenu(self)
+        
+        copy_action = menu.addAction(f"复制UID: {uid[:8]}...")
+        copy_action.triggered.connect(lambda: self._copy_uid_to_clipboard(uid))
+        
+        menu.exec(QCursor.pos())
+    
+    def _copy_uid_to_clipboard(self, uid: str):
+        """Copy UID to system clipboard."""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(uid)
+        self.statusBar().showMessage(f"已复制UID: {uid}", 3000)
 
     def _init_client(self):
-        """Initialize API client with stored key."""
         default = self.key_manager.get_default_key()
         if default:
             _, key = default
@@ -398,7 +407,87 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("⚠ No API key configured - open Settings")
             log.warning("No API key found")
 
-    # ── Project Management ─────────────────────────────
+    def _on_model_changed(self, index):
+        """Handle model switch with cache cost warning."""
+        if not self.current_project:
+            return
+        
+        new_model = self.model_combo.currentData()
+        new_model_info = MODELS.get(new_model)
+        if not new_model_info:
+            return
+        
+        docs = self.doc_processor.get_project_documents(self.current_project.id)
+        doc_tokens = sum(d.get('token_count', 0) for d in docs)
+        system_tokens = len(self.current_project.system_prompt) // 4
+        total_cached = doc_tokens + system_tokens
+        
+        if total_cached == 0:
+            total_cached = 500
+        
+        recent = db.execute("""
+            SELECT cache_read_tokens, cache_creation_tokens 
+            FROM api_call_log 
+            WHERE project_id = ? AND model_id = ?
+            ORDER BY created_at DESC LIMIT 5
+        """, (self.current_project.id, new_model))
+        
+        hit_count = sum(1 for r in recent if r['cache_read_tokens'] > 0)
+        
+        write_cost = total_cached * new_model_info.input_price * 1.25 / 1_000_000
+        read_cost = total_cached * new_model_info.input_price * 0.10 / 1_000_000
+        
+        if hit_count == 0 and len(recent) == 0:
+            msg = (
+                f"⚠️ 首次使用 {new_model_info.display_name} — "
+                f"Cache冷启动成本约 ${write_cost:.4f} ({total_cached:,} tokens)"
+            )
+            self.statusBar().setStyleSheet("background: #FFF3CD; color: #856404; font-weight: bold;")
+            QTimer.singleShot(5000, lambda: self.statusBar().setStyleSheet(""))
+        elif hit_count < 2:
+            msg = (
+                f"ℹ️ 切换到 {new_model_info.display_name} — "
+                f"Cache可能已过期，预期成本 ${write_cost:.4f}，命中后降至 ${read_cost:.4f}"
+            )
+        else:
+            msg = f"✅ 切换到 {new_model_info.display_name} — Cache仍热，文档读取成本仅 ${read_cost:.4f}"
+        
+        self.statusBar().showMessage(msg, 8000)
+        log.info(f"Model switched: {new_model}, cache status: {hit_count}/{len(recent)} hits")
+
+    def _on_thinking_toggled(self, checked: bool):
+        if checked:
+            self._recommend_thinking_budget()
+        else:
+            self.thinking_recommend_label.setVisible(False)
+
+    def _recommend_thinking_budget(self):
+        """Recommend thinking budget based on input length."""
+        if not self.thinking_check.isChecked():
+            return
+        
+        text = self.input_box.toPlainText()
+        length = len(text)
+        
+        if length < 200:
+            recommended = 1024
+            reason = "短问题，快速推理即可"
+        elif length < 1000:
+            recommended = 2048
+            reason = "中等复杂度，标准分析"
+        elif length < 3000:
+            recommended = 4096
+            reason = "较长内容，建议深度思考"
+        else:
+            recommended = 8192
+            reason = "复杂长文本，需要充分推理"
+        
+        current = self.thinking_budget.currentData()
+        if abs(current - recommended) >= 2048:
+            self.thinking_recommend_label.setText(f"💡 建议: {recommended} — {reason}")
+            self.thinking_recommend_label.setVisible(True)
+        else:
+            self.thinking_recommend_label.setVisible(False)
 
     def _refresh_projects(self):
         self.project_list.clear()
@@ -417,7 +506,6 @@ class MainWindow(QMainWindow):
             model_id = self.model_combo.currentData()
             project = self.project_mgr.create(name.strip(), model=model_id)
             self._refresh_projects()
-            # Select the new project
             for i in range(self.project_list.count()):
                 item = self.project_list.item(i)
                 if item.data(Qt.ItemDataRole.UserRole) == project.id:
@@ -437,6 +525,7 @@ class MainWindow(QMainWindow):
         self.system_prompt_edit.setPlainText(self.current_project.system_prompt)
         self._refresh_conversations()
         self._refresh_documents()
+        self._update_stats()
         self.statusBar().showMessage(f"Project: {self.current_project.name}")
         log.debug("Selected project: %s", self.current_project.name)
 
@@ -459,8 +548,6 @@ class MainWindow(QMainWindow):
                 self.project_mgr.delete(pid)
                 self.current_project = None
                 self._refresh_projects()
-
-    # ── Conversation Management ────────────────────────
 
     def _refresh_conversations(self):
         self.conv_list.clear()
@@ -525,7 +612,6 @@ class MainWindow(QMainWindow):
                 self._refresh_conversations()
 
     def _export_conversation(self, conv_id: str):
-        """Export a conversation as markdown."""
         conv = self.conv_mgr.get_conversation(conv_id)
         if not conv:
             return
@@ -549,8 +635,6 @@ class MainWindow(QMainWindow):
             Path(path).write_text(md, encoding="utf-8")
             self.statusBar().showMessage(f"Exported to {path}")
 
-    # ── Document Management ────────────────────────────
-
     def _refresh_documents(self):
         self.doc_list.clear()
         if not self.current_project:
@@ -560,7 +644,7 @@ class MainWindow(QMainWindow):
         for d in docs:
             tc = d.get("token_count", 0)
             total_tokens += tc
-            item = QListWidgetItem(f"{d['filename']}  ({tc:,} tokens)")
+            item = QListWidgetItem(f"{d['filename']} ({tc:,} tokens)")
             item.setData(Qt.ItemDataRole.UserRole, d["id"])
             self.doc_list.addItem(item)
         self.doc_tokens_label.setText(f"Documents: {total_tokens:,} tokens total")
@@ -596,16 +680,13 @@ class MainWindow(QMainWindow):
             self.doc_processor.remove_document(doc_id)
             self._refresh_documents()
 
-    # ── Chat Display ───────────────────────────────────
-
     def _clear_chat(self):
-        self.chat_view.setHtml(get_chat_html_template())
+        self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
         self.stats_label.setText("No conversation selected")
         self.token_label.setText("")
 
     def _load_chat_history(self):
         """Load and display all messages in current conversation."""
-        # 强制使用暗黑模式模板
         self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
         if not self.current_conv:
             return
@@ -614,37 +695,61 @@ class MainWindow(QMainWindow):
         for msg in messages:
             html = render_markdown(msg.content)
             meta = ""
+            
             if msg.role == "assistant" and msg.cost_usd:
                 meta = f"{msg.input_tokens:,} in / {msg.output_tokens:,} out"
                 if msg.cache_read_tokens:
                     meta += f" / {msg.cache_read_tokens:,} cached"
-                meta += f" | {self.token_tracker.format_cost(msg.cost_usd)}"
-
-            escaped_html = html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
-            escaped_meta = meta.replace("'", "\\'")
-            self.chat_view.page().runJavaScript(
-                f"addMessage('{msg.role}', '{escaped_html}', '{escaped_meta}')"
-            )
+                meta += f" | ${msg.cost_usd:.4f}"
+            
+            # 使用新的转义函数
+            escaped_html = escape_js_string(html)
+            escaped_meta = escape_js_string(meta)
+            uid = msg.id
+            
+            js_code = f"addMessage('{msg.role}', '{escaped_html}', '{escaped_meta}', '{uid}')"
+            self.chat_view.page().runJavaScript(js_code)
 
     def _update_stats(self):
-        """Update the stats panel."""
         if not self.current_conv:
             self.stats_label.setText("No conversation selected")
             return
+        
         stats = self.conv_mgr.get_conversation_stats(self.current_conv.id)
+        
+        cache_stats = db.execute("""
+            SELECT 
+                SUM(CASE WHEN cache_read_tokens > 0 THEN 1 ELSE 0 END) as hits,
+                COUNT(*) as total,
+                SUM(cache_read_tokens) as total_cache_read,
+                SUM(input_tokens) as total_input
+            FROM api_call_log 
+            WHERE conversation_id = ?
+            ORDER BY created_at DESC LIMIT 10
+        """, (self.current_conv.id,))
+        
+        cache_text = ""
+        if cache_stats and cache_stats[0]['total'] > 0:
+            s = cache_stats[0]
+            hit_rate = (s['hits'] / s['total']) * 100 if s['total'] > 0 else 0
+            cache_savings = s['total_cache_read'] * 0.9 / 1_000_000
+            
+            cache_text = (
+                f"\n---\n"
+                f"Cache: {s['hits']}/{s['total']} ({hit_rate:.0f}%)\n"
+                f"Saved: ~${cache_savings:.4f}"
+            )
+        
         txt = (
             f"Messages: {stats['msg_count']}\n"
-            f"Input tokens: {stats['total_input']:,}\n"
-            f"Output tokens: {stats['total_output']:,}\n"
-            f"Cache reads: {stats['total_cache_read']:,}\n"
-            f"Total cost: {self.token_tracker.format_cost(stats['total_cost'])}"
+            f"Input: {stats['total_input']:,} tok\n"
+            f"Output: {stats['total_output']:,} tok\n"
+            f"Cost: ${stats['total_cost']:.4f}"
+            f"{cache_text}"
         )
         self.stats_label.setText(txt)
 
-    # ── Message Sending ────────────────────────────────
-
     def _send_message(self):
-        """Send user message and start streaming response."""
         if self.is_streaming:
             return
         text = self.input_box.toPlainText().strip()
@@ -657,27 +762,23 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "No API key configured. Open Settings.")
             return
 
-        # Auto-create conversation if needed
         if not self.current_conv:
             self._new_conversation()
             if not self.current_conv:
                 return
 
-        # Auto-title from first message
         messages = self.conv_mgr.get_messages(self.current_conv.id)
         if not messages:
             title = text[:50] + ("..." if len(text) > 50 else "")
             self.conv_mgr.rename_conversation(self.current_conv.id, title)
             self._refresh_conversations()
 
-        # Save user message
         attachments = self.pending_attachments.copy()
         self.conv_mgr.add_message(
             self.current_conv.id, "user", text,
             attachments=[{"type": a["type"], "filename": a.get("filename", "")} for a in attachments],
         )
 
-        # Display user message
         user_html = render_markdown(text)
         escaped = user_html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
         self.chat_view.page().runJavaScript(f"addMessage('user', '{escaped}', '')")
@@ -685,7 +786,6 @@ class MainWindow(QMainWindow):
         self.input_box.clear()
         self.pending_attachments.clear()
 
-        # Build API request
         model_id = self.model_combo.currentData()
         try:
             system_content, api_messages, est_tokens = self.context_builder.build(
@@ -701,13 +801,11 @@ class MainWindow(QMainWindow):
             self.chat_view.page().runJavaScript(f"addError('Context build error: {str(e)}')")
             return
 
-        # Thinking config
         thinking_cfg = None
         if self.thinking_check.isChecked():
             budget = int(self.thinking_budget.currentText())
             thinking_cfg = {"type": "enabled", "budget_tokens": budget}
 
-        # Start streaming
         self.is_streaming = True
         self.btn_send.setText("Stop")
         self.btn_send.setStyleSheet("QPushButton { background: #E74C3C; color: white; border-radius: 6px; font-weight: bold; }")
@@ -721,6 +819,8 @@ class MainWindow(QMainWindow):
         self.worker = APIWorker(
             self.client, api_messages, system_content,
             model_id, 8192, thinking_cfg,
+            project_id=self.current_project.id,
+            conversation_id=self.current_conv.id,
         )
         self.worker.text_delta.connect(self._on_text_delta)
         self.worker.thinking_delta.connect(self._on_thinking_delta)
@@ -730,48 +830,42 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_text_delta(self, full_text: str):
-        """Handle streaming text update."""
         html = render_markdown(full_text)
         escaped = html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
         self.chat_view.page().runJavaScript(f"appendStreamText('{escaped}')")
 
     @Slot(str)
     def _on_thinking_delta(self, text: str):
-        """Handle streaming thinking update."""
         self._accumulated_thinking += text
 
     @Slot(str, str, object)
     def _on_stream_finished(self, full_text: str, thinking_text: str, usage):
-        """Handle stream completion."""
         self.is_streaming = False
         self._reset_send_button()
 
         model_id = self.model_combo.currentData()
         cost = 0.0
         meta = ""
+        msg_uid = ""
 
         if isinstance(usage, UsageInfo):
             cost = self.token_tracker.calculate_cost(model_id, usage)
             meta = f"{usage.input_tokens:,} in / {usage.output_tokens:,} out"
             if usage.cache_read_tokens:
                 meta += f" / {usage.cache_read_tokens:,} cached"
-            meta += f" | {self.token_tracker.format_cost(cost)}"
+            meta += f" | ${cost:.4f}"
 
-        # Show thinking if any
         if thinking_text.strip():
             thinking_html = render_markdown(thinking_text)
-            escaped_thinking = thinking_html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+            escaped_thinking = escape_js_string(thinking_html)
             self.chat_view.page().runJavaScript(f"addThinking('{escaped_thinking}')")
 
-        # Finalize streaming message
         final_html = render_markdown(full_text)
-        escaped = final_html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
-        escaped_meta = meta.replace("'", "\\'")
-        self.chat_view.page().runJavaScript(f"finishStreaming('{escaped}', '{escaped_meta}')")
+        escaped = escape_js_string(final_html)
+        escaped_meta = escape_js_string(meta)
 
-        # Save assistant message
         if self.current_conv and full_text.strip():
-            self.conv_mgr.add_message(
+            msg_id = self.conv_mgr.add_message(
                 self.current_conv.id, "assistant", full_text,
                 thinking_content=thinking_text,
                 model_used=model_id,
@@ -781,14 +875,17 @@ class MainWindow(QMainWindow):
                 cache_creation_tokens=usage.cache_creation_tokens if usage else 0,
                 cost_usd=cost,
             )
+            msg_uid = str(msg_id)
+            
+            js_code = f"finishStreaming('{escaped}', '{escaped_meta}', '{msg_uid}')"
+            self.chat_view.page().runJavaScript(js_code)
 
         self._update_stats()
-        self.statusBar().showMessage(f"Done | {meta}" if meta else "Done")
+        self.statusBar().showMessage(f"Done | UID: {msg_uid[:8]}" if msg_uid else "Done")
         log.info("Response complete: %s", meta)
 
     @Slot(str)
     def _on_stream_error(self, error_msg: str):
-        """Handle streaming error."""
         self.is_streaming = False
         self._reset_send_button()
         escaped = error_msg.replace("\\", "\\\\").replace("'", "\\'")
@@ -809,8 +906,6 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             pass
         self.btn_send.clicked.connect(self._send_message)
-
-    # ── Attachments ────────────────────────────────────
 
     def _attach_image(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -833,8 +928,6 @@ class MainWindow(QMainWindow):
             names = ", ".join(a.get("filename", "?") for a in self.pending_attachments)
             self.token_label.setText(f"📎 Attached: {names}")
 
-    # ── System Prompt ──────────────────────────────────
-
     def _save_system_prompt(self):
         if not self.current_project:
             return
@@ -843,8 +936,6 @@ class MainWindow(QMainWindow):
         self.current_project.system_prompt = prompt
         self.statusBar().showMessage("System prompt saved")
         log.info("Saved system prompt for project %s", self.current_project.name)
-
-    # ── Settings ───────────────────────────────────────
 
     def _open_settings(self):
         dlg = SettingsDialog(self.client, self)
@@ -855,8 +946,6 @@ class MainWindow(QMainWindow):
         self._init_client()
         self.statusBar().showMessage("Settings updated")
 
-    # ── Cleanup ────────────────────────────────────────
-
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
@@ -865,3 +954,6 @@ class MainWindow(QMainWindow):
         db.close()
         log.info("Application closed")
         event.accept()
+
+
+
