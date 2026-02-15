@@ -4,9 +4,22 @@ from utils.markdown_renderer import render_markdown, get_chat_html_template, esc
 import os
 import sys
 import base64
+import json
+import time
 import logging
 from pathlib import Path
 from functools import partial
+import re
+
+# #region agent log
+DEBUG_LOG_PATH = r"c:\Users\Think\Desktop\ClaudeStation\claude_station\.cursor\debug.log"
+def _dlog(location, message, data=None, hypothesis_id=None):
+    try:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"id": "log_%s" % int(time.time()*1000), "timestamp": int(time.time()*1000), "location": location, "message": message, "data": data or {}, "hypothesisId": hypothesis_id or ""}) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -18,6 +31,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QSize
 from PySide6.QtGui import QAction, QKeySequence, QIcon, QFont, QShortcut
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtCore import QObject, Slot
 
 from config import (
     APP_NAME, APP_VERSION, MODELS, DEFAULT_MODEL,
@@ -35,6 +51,35 @@ from ui.settings_dialog import SettingsDialog
 from data.database import db
 
 log = logging.getLogger(__name__)
+
+
+class ChatBridge(QObject):
+    """Exposed to chat page via QWebChannel: insert ref text into input and copy to clipboard."""
+
+    def __init__(self, main_window: "MainWindow", parent=None):
+        super().__init__(parent)
+        self._main_window = main_window
+
+    @Slot(str)
+    def insertRef(self, text: str) -> None:
+        if not text:
+            return
+        self._main_window.input_box.insertPlainText(text)
+        QApplication.clipboard().setText(text)
+        preview = text[:12] + ("..." if len(text) > 12 else "")
+        self._main_window.statusBar().showMessage("已引用并复制: " + preview, 2000)
+
+
+class ChatWebPage(QWebEnginePage):
+    """Chat page with QWebChannel so JS can call insertRef when UID is clicked."""
+
+    def __init__(self, main_window: "MainWindow", parent=None):
+        super().__init__(parent)
+        self._main_window = main_window
+        self._bridge = ChatBridge(main_window, self)
+        self._channel = QWebChannel(self)
+        self._channel.registerObject("chatHost", self._bridge)
+        self.setWebChannel(self._channel)
 
 
 class APIWorker(QThread):
@@ -209,8 +254,13 @@ class MainWindow(QMainWindow):
 
         proj_header = QHBoxLayout()
         proj_header.addWidget(QLabel(" **Projects**"))
-        btn_new_proj = QPushButton("+")
-        btn_new_proj.setFixedSize(28, 28)
+        btn_new_proj = QPushButton("＋ 新项目")
+        btn_new_proj.setFixedHeight(28)
+        btn_new_proj.setStyleSheet(
+            "QPushButton { font-size: 12px; font-weight: bold; color: #E5E5E5; "
+            "background: #3A3A3A; border: 1px solid #555; border-radius: 4px; min-width: 72px; }"
+            "QPushButton:hover { background: #454545; }"
+        )
         btn_new_proj.setToolTip("New Project (Ctrl+Shift+N)")
         btn_new_proj.clicked.connect(self._new_project)
         proj_header.addWidget(btn_new_proj)
@@ -229,8 +279,13 @@ class MainWindow(QMainWindow):
 
         conv_header = QHBoxLayout()
         conv_header.addWidget(QLabel(" **Conversations**"))
-        btn_new_conv = QPushButton("+")
-        btn_new_conv.setFixedSize(28, 28)
+        btn_new_conv = QPushButton("＋ 新对话")
+        btn_new_conv.setFixedHeight(28)
+        btn_new_conv.setStyleSheet(
+            "QPushButton { font-size: 12px; font-weight: bold; color: #E5E5E5; "
+            "background: #3A3A3A; border: 1px solid #555; border-radius: 4px; min-width: 72px; }"
+            "QPushButton:hover { background: #454545; }"
+        )
         btn_new_conv.setToolTip("New Conversation (Ctrl+N)")
         btn_new_conv.clicked.connect(self._new_conversation)
         conv_header.addWidget(btn_new_conv)
@@ -251,7 +306,6 @@ class MainWindow(QMainWindow):
         center_layout.setSpacing(0)
 
         self.chat_view = QWebEngineView()
-        self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
         center_layout.addWidget(self.chat_view, 1)
 
         input_frame = QFrame()
@@ -264,13 +318,19 @@ class MainWindow(QMainWindow):
         input_layout = QVBoxLayout(input_frame)
         input_layout.setContentsMargins(12, 8, 12, 8)
 
-        self.token_label = QLabel("")
-        self.token_label.setStyleSheet("color: #999; font-size: 11px;")
-        input_layout.addWidget(self.token_label)
+        attach_row = QHBoxLayout()
+        self.attach_list_container = QWidget()
+        self.attach_list_layout = QHBoxLayout(self.attach_list_container)
+        self.attach_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.attach_list_layout.setSpacing(6)
+        attach_row.addWidget(self.attach_list_container, 1)
+        input_layout.addLayout(attach_row)
 
         input_row = QHBoxLayout()
         self.input_box = QTextEdit()
-        self.input_box.setPlaceholderText("Type your message... (Ctrl+Enter to send)")
+        self.input_box.setPlaceholderText(
+            "Type your message... (Ctrl+Enter to send). Use @#uid to reference a message (e.g. @#e9cfaca2)."
+        )
         self.input_box.setMaximumHeight(120)
         self.input_box.setAcceptRichText(False)
         self.input_box.textChanged.connect(self._recommend_thinking_budget)
@@ -279,8 +339,8 @@ class MainWindow(QMainWindow):
         btn_col = QVBoxLayout()
         self.btn_attach = QPushButton("📎")
         self.btn_attach.setFixedSize(36, 36)
-        self.btn_attach.setToolTip("Attach image")
-        self.btn_attach.clicked.connect(self._attach_image)
+        self.btn_attach.setToolTip("Attach files (images, PDF, etc.)")
+        self.btn_attach.clicked.connect(self._attach_files)
         btn_col.addWidget(self.btn_attach)
 
         self.btn_send = QPushButton("Send")
@@ -293,6 +353,12 @@ class MainWindow(QMainWindow):
         input_layout.addLayout(input_row)
         center_layout.addWidget(input_frame)
         splitter.addWidget(center_panel)
+
+        self.chat_view.setPage(ChatWebPage(self))
+        # #region agent log
+        self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
+        _dlog("main_window.py:254", "setHtml called", {"caller": "init"}, "H1")
+        # #endregion
 
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -351,6 +417,7 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Ready")
         self.pending_attachments: list[dict] = []
+        self._pending_history_messages: list | None = None
 
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self._send_message)
@@ -683,31 +750,54 @@ class MainWindow(QMainWindow):
     def _clear_chat(self):
         self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
         self.stats_label.setText("No conversation selected")
-        self.token_label.setText("")
 
     def _load_chat_history(self):
         """Load and display all messages in current conversation."""
+        # #region agent log
         self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
+        _dlog("main_window.py:689", "setHtml called", {"caller": "load_chat_history"}, "H1")
+        # #endregion
         if not self.current_conv:
             return
 
         messages = self.conv_mgr.get_messages(self.current_conv.id)
+        if not messages:
+            return
+        self._pending_history_messages = messages
+        try:
+            self.chat_view.page().loadFinished.disconnect(self._inject_chat_history)
+        except (TypeError, RuntimeError):
+            pass
+        self.chat_view.page().loadFinished.connect(self._inject_chat_history)
+
+    def _inject_chat_history(self, ok: bool):
+        """Run after chat page load: inject message history (fixes addMessage not defined)."""
+        if not self._pending_history_messages:
+            return
+        try:
+            self.chat_view.page().loadFinished.disconnect(self._inject_chat_history)
+        except (TypeError, RuntimeError):
+            pass
+        messages = self._pending_history_messages
+        self._pending_history_messages = None
+        # #region agent log
+        _dlog("main_window.py:_inject_chat_history", "runJS addMessage loop after loadFinished", {"msg_count": len(messages), "runId": "post-fix"}, "H1")
+        # #endregion
         for msg in messages:
             html = render_markdown(msg.content)
             meta = ""
-            
             if msg.role == "assistant" and msg.cost_usd:
                 meta = f"{msg.input_tokens:,} in / {msg.output_tokens:,} out"
                 if msg.cache_read_tokens:
                     meta += f" / {msg.cache_read_tokens:,} cached"
                 meta += f" | ${msg.cost_usd:.4f}"
-            
-            # 使用新的转义函数
             escaped_html = escape_js_string(html)
             escaped_meta = escape_js_string(meta)
             uid = msg.id
-            
             js_code = f"addMessage('{msg.role}', '{escaped_html}', '{escaped_meta}', '{uid}')"
+            # #region agent log
+            _dlog("main_window.py:718", "runJS addMessage", {"in_load_history": True, "after_load": True, "js_preview": js_code[:80]}, "H1")
+            # #endregion
             self.chat_view.page().runJavaScript(js_code)
 
     def _update_stats(self):
@@ -779,8 +869,13 @@ class MainWindow(QMainWindow):
             attachments=[{"type": a["type"], "filename": a.get("filename", "")} for a in attachments],
         )
 
+        text_for_api = self._expand_uid_refs_in_message(text)
+
         user_html = render_markdown(text)
         escaped = user_html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+        # #region agent log
+        _dlog("main_window.py:792", "runJS addMessage (send)", {"in_load_history": False, "escaped_len": len(escaped)}, "H2")
+        # #endregion
         self.chat_view.page().runJavaScript(f"addMessage('user', '{escaped}', '')")
 
         self.input_box.clear()
@@ -791,14 +886,19 @@ class MainWindow(QMainWindow):
             system_content, api_messages, est_tokens = self.context_builder.build(
                 project_id=self.current_project.id,
                 conversation_id=self.current_conv.id,
-                user_message=text,
+                user_message=text_for_api,
                 system_prompt=self.current_project.system_prompt,
                 model_id=model_id,
                 user_attachments=attachments,
             )
         except Exception as e:
             log.exception("Failed to build context")
-            self.chat_view.page().runJavaScript(f"addError('Context build error: {str(e)}')")
+            # #region agent log
+            err_s = str(e)
+            _dlog("main_window.py:808", "runJS addError (context build)", {"exception_has_quote": "'" in err_s, "err_preview": err_s[:60]}, "H3")
+            # #endregion
+            escaped_err = escape_js_string(err_s)
+            self.chat_view.page().runJavaScript(f"addError('Context build error: {escaped_err}')")
             return
 
         thinking_cfg = None
@@ -865,7 +965,7 @@ class MainWindow(QMainWindow):
         escaped_meta = escape_js_string(meta)
 
         if self.current_conv and full_text.strip():
-            msg_id = self.conv_mgr.add_message(
+            msg = self.conv_mgr.add_message(
                 self.current_conv.id, "assistant", full_text,
                 thinking_content=thinking_text,
                 model_used=model_id,
@@ -875,8 +975,7 @@ class MainWindow(QMainWindow):
                 cache_creation_tokens=usage.cache_creation_tokens if usage else 0,
                 cost_usd=cost,
             )
-            msg_uid = str(msg_id)
-            
+            msg_uid = msg.id
             js_code = f"finishStreaming('{escaped}', '{escaped_meta}', '{msg_uid}')"
             self.chat_view.page().runJavaScript(js_code)
 
@@ -888,7 +987,10 @@ class MainWindow(QMainWindow):
     def _on_stream_error(self, error_msg: str):
         self.is_streaming = False
         self._reset_send_button()
-        escaped = error_msg.replace("\\", "\\\\").replace("'", "\\'")
+        escaped = escape_js_string(error_msg)
+        # #region agent log
+        _dlog("main_window.py:902", "runJS addError (stream)", {"error_has_quote": "'" in error_msg, "has_newline": "\n" in error_msg}, "H3")
+        # #endregion
         self.chat_view.page().runJavaScript(f"addError('{escaped}')")
         self.statusBar().showMessage(f"Error: {error_msg}")
         log.error("Stream error: %s", error_msg)
@@ -907,26 +1009,132 @@ class MainWindow(QMainWindow):
             pass
         self.btn_send.clicked.connect(self._send_message)
 
-    def _attach_image(self):
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "Attach Images", "",
-            "Images (*.png *.jpg *.jpeg *.gif *.webp);;All Files (*)",
+    def _attach_files(self):
+        all_supported = (
+            "*.png *.jpg *.jpeg *.gif *.webp *.pdf *.txt *.md *.markdown "
+            "*.doc *.docx *.xlsx *.xls *.csv *.json *.html *.rtf"
         )
+        filter_str = (
+            f"All supported ({all_supported});;"
+            "Images (*.png *.jpg *.jpeg *.gif *.webp);;"
+            "PDF (*.pdf);;"
+            "Text / Markdown (*.txt *.md *.markdown);;"
+            "Word (*.doc *.docx);;"
+            "Excel (*.xlsx *.xls);;"
+            "CSV (*.csv);;"
+            "Other (*.json *.html *.rtf);;"
+            "All Files (*)"
+        )
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Attach Files", "", filter_str,
+        )
+        image_exts = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+        image_media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                       ".gif": "image/gif", ".webp": "image/webp"}
+        doc_media = {
+            ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
+            ".markdown": "text/markdown", ".doc": "application/msword",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xls": "application/vnd.ms-excel", ".csv": "text/csv",
+            ".json": "application/json", ".html": "text/html", ".rtf": "application/rtf",
+        }
         for path in paths:
-            data = Path(path).read_bytes()
+            try:
+                data = Path(path).read_bytes()
+            except OSError as e:
+                QMessageBox.warning(self, "Attach Error", f"Cannot read file: {e}")
+                continue
             b64 = base64.b64encode(data).decode()
             ext = Path(path).suffix.lower()
-            media_map = {".png": "image/png", ".jpg": "image/jpeg",
-                         ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
-            self.pending_attachments.append({
-                "type": "image",
-                "data": b64,
-                "media_type": media_map.get(ext, "image/png"),
-                "filename": Path(path).name,
-            })
-        if self.pending_attachments:
-            names = ", ".join(a.get("filename", "?") for a in self.pending_attachments)
-            self.token_label.setText(f"📎 Attached: {names}")
+            name = Path(path).name
+            if ext in image_exts:
+                self.pending_attachments.append({
+                    "type": "image",
+                    "data": b64,
+                    "media_type": image_media.get(ext, "image/png"),
+                    "filename": name,
+                })
+            elif ext in doc_media:
+                self.pending_attachments.append({
+                    "type": "document",
+                    "data": b64,
+                    "media_type": doc_media[ext],
+                    "filename": name,
+                })
+            else:
+                self.statusBar().showMessage(f"Unsupported file type: {ext}", 3000)
+        self._update_attachment_ui()
+
+    def _expand_uid_refs_in_message(self, text: str) -> str:
+        """Expand only @#uid references (explicit ref syntax) into message content for the LLM.
+        Plain #hex in pasted text is NOT expanded, to avoid false matches."""
+        if not self.current_conv or not text:
+            return text
+        # Only match explicit reference syntax: @#uid (8 hex or full UUID)
+        refs = re.findall(
+            r"@#([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?)",
+            text,
+        )
+        refs = list(dict.fromkeys(refs))
+        if not refs:
+            return text
+        messages = self.conv_mgr.get_messages(self.current_conv.id)
+        id_to_msg = {m.id: m for m in messages}
+        parts = ["【以下为用户通过 @#uid 引用的消息原文，供参考】"]
+        for ref in refs:
+            msg = id_to_msg.get(ref)
+            if not msg and len(ref) == 8:
+                for mid, m in id_to_msg.items():
+                    if mid.startswith(ref) or mid.replace("-", "").startswith(ref):
+                        msg = m
+                        break
+            if msg:
+                parts.append(f"【消息 @#{ref[:8]}】\n{msg.content}")
+        if len(parts) <= 1:
+            return text
+        parts.append("【用户当前问题】")
+        parts.append(text)
+        return "\n\n".join(parts)
+
+    def _clear_attachments(self):
+        self.pending_attachments.clear()
+        self._update_attachment_ui()
+
+    def _remove_attachment(self, index: int):
+        if 0 <= index < len(self.pending_attachments):
+            self.pending_attachments.pop(index)
+            self._update_attachment_ui()
+
+    def _update_attachment_ui(self):
+        while self.attach_list_layout.count():
+            item = self.attach_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for i, att in enumerate(self.pending_attachments):
+            name = att.get("filename", "?")
+            chip = QFrame()
+            chip.setStyleSheet("QFrame { background: #3A3A3A; border-radius: 4px; padding: 2px 6px; }")
+            chip_layout = QHBoxLayout(chip)
+            chip_layout.setContentsMargins(6, 2, 2, 2)
+            chip_layout.setSpacing(4)
+            lbl = QLabel(name)
+            lbl.setStyleSheet("color: #CCC; font-size: 11px; max-width: 200px;")
+            lbl.setToolTip(name)
+            lbl.setWordWrap(False)
+            chip_layout.addWidget(lbl)
+            btn = QPushButton("\u00D7")
+            btn.setFixedSize(22, 22)
+            btn.setStyleSheet(
+                "QPushButton { color: #AAA; font-size: 16px; font-weight: bold; "
+                "background: transparent; border: 1px solid #555; border-radius: 4px; } "
+                "QPushButton:hover { color: #E74C3C; border-color: #E74C3C; background: #3A2020; }"
+            )
+            btn.setToolTip("Remove this file")
+            idx = i
+            btn.clicked.connect(lambda checked=False, idx=idx: self._remove_attachment(idx))
+            chip_layout.addWidget(btn)
+            self.attach_list_layout.addWidget(chip)
 
     def _save_system_prompt(self):
         if not self.current_project:

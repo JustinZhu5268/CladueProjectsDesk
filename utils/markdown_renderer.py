@@ -66,6 +66,7 @@ def get_chat_html_template(dark_mode: bool = True) -> str:
 <style type="text/css">
 body { 
     font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; 
+    font-size: 14px; 
     background: %(bg)s; 
     color: %(text)s; 
     margin: 0; 
@@ -79,7 +80,11 @@ body {
     max-width: 85%%; 
     word-wrap: break-word; 
     position: relative; 
+    font-size: 14px; 
 }
+.message h1 { font-size: 1.35em; margin: 0.5em 0 0.35em 0; }
+.message h2 { font-size: 1.2em; margin: 0.45em 0 0.3em 0; }
+.message h3 { font-size: 1.1em; margin: 0.4em 0 0.25em 0; }
 .user { 
     background: %(user_bg)s; 
     margin-left: auto; 
@@ -96,11 +101,26 @@ body {
     cursor: pointer; 
 }
 .uid { 
-    font-family: Consolas, monospace; 
-    font-size: 10px; 
+    font-family: Consolas, "Cascadia Code", monospace; 
+    font-size: 11px; 
+    font-weight: 500; 
     color: %(uid)s; 
     margin-left: 8px; 
+    padding: 2px 6px; 
+    border-radius: 4px; 
+    background: rgba(128,128,128,0.2); 
 }
+.uid-link { 
+    cursor: pointer; 
+}
+.uid-link:hover { text-decoration: underline; }
+.msg-copy { 
+    margin-left: 8px; 
+    cursor: pointer; 
+    opacity: 0.7; 
+    user-select: none; 
+}
+.msg-copy:hover { opacity: 1; }
 pre { 
     background: %(code_bg)s; 
     padding: 12px; 
@@ -115,6 +135,7 @@ code {
     background: %(assist_bg)s; 
 }
 </style>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 </head>
 <body>
 <div id="chat"></div>
@@ -124,6 +145,11 @@ code {
 </div>
 
 <script type="text/javascript">
+if (typeof qt !== 'undefined' && qt.webChannelTransport) {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        window.chatHost = channel.objects.chatHost;
+    });
+}
 // Global message storage
 var messageStore = {};
 
@@ -145,16 +171,33 @@ function addMessage(role, htmlContent, metaInfo, uid) {
         metaDiv.className = 'meta';
         
         var metaText = metaInfo || '';
+        metaDiv.innerHTML = metaText;
         if (uid && uid.length > 0) {
-            metaText += '<span class="uid">#' + uid.substring(0, 8) + '</span>';
             messageStore[uid] = {
                 role: role,
                 content: htmlContent,
                 meta: metaInfo
             };
+            var uidSpan = document.createElement('span');
+            uidSpan.className = 'uid uid-link';
+            uidSpan.setAttribute('data-uid', uid);
+            uidSpan.textContent = '#' + uid.substring(0, 8);
+            uidSpan.title = 'Click to reference in input';
+            uidSpan.onclick = function() {
+                if (window.chatHost) window.chatHost.insertRef('@#' + uid);
+            };
+            metaDiv.appendChild(uidSpan);
+            var copySpan = document.createElement('span');
+            copySpan.className = 'msg-copy';
+            copySpan.title = 'Copy';
+            copySpan.textContent = ' \uD83D\uDCCB';
+            copySpan.onclick = function(ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                copyMessageText(uid);
+            };
+            metaDiv.appendChild(copySpan);
         }
-        
-        metaDiv.innerHTML = metaText;
         msgDiv.appendChild(metaDiv);
     }
     
@@ -193,6 +236,28 @@ function addError(errorMsg) {
     window.scrollTo(0, document.body.scrollHeight);
 }
 
+// Copy message text to clipboard
+function copyMessageText(uid) {
+    var entry = messageStore[uid];
+    if (!entry || !entry.content) return;
+    var div = document.createElement('div');
+    div.innerHTML = entry.content;
+    var text = div.innerText || div.textContent || '';
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {}).catch(function() {});
+    } else {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+    }
+}
+
 // Clear all messages
 function clearChat() {
     document.getElementById('chat').innerHTML = '';
@@ -201,6 +266,7 @@ function clearChat() {
 
 // Expose to window for safety
 window.addMessage = addMessage;
+window.copyMessageText = copyMessageText;
 window.startStreaming = startStreaming;
 window.appendStreamText = appendStreamText;
 window.finishStreaming = finishStreaming;

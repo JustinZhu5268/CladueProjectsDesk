@@ -85,6 +85,15 @@ class ContextBuilder:
                             "data": att["data"],
                         }
                     })
+                elif att.get("type") == "document":
+                    user_content.append({
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": att.get("media_type", "application/pdf"),
+                            "data": att["data"],
+                        }
+                    })
             messages.append({"role": "user", "content": user_content})
         else:
             messages.append({"role": "user", "content": user_message})
