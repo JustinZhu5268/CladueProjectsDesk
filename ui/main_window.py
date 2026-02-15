@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 
 
 class ChatBridge(QObject):
-    """Exposed to chat page via QWebChannel: insert ref text into input and copy to clipboard."""
+    """Exposed to chat page via QWebChannel: insert ref text into input."""
 
     def __init__(self, main_window: "MainWindow", parent=None):
         super().__init__(parent)
@@ -68,6 +68,11 @@ class ChatBridge(QObject):
         QApplication.clipboard().setText(text)
         preview = text[:12] + ("..." if len(text) > 12 else "")
         self._main_window.statusBar().showMessage("已引用并复制: " + preview, 2000)
+
+    @Slot(str)
+    def showStatus(self, message: str) -> None:
+        """Show status message in main window."""
+        self._main_window.statusBar().showMessage(message, 3000)
 
 
 class ChatWebPage(QWebEnginePage):
@@ -428,41 +433,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Escape"), self).activated.connect(self._cancel_streaming)
     
     def _setup_context_menu(self):
-        """Setup context menu for chat view to copy UID."""
-        self.chat_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.chat_view.customContextMenuRequested.connect(self._chat_context_menu)
+        """Disable default context menu."""
+        self.chat_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
     
-    def _chat_context_menu(self, pos):
-        """Show context menu in chat area."""
-        js_code = f"""
-            (function() {{
-                var el = document.elementFromPoint({pos.x()}, {pos.y()});
-                if (!el) return null;
-                var msg = el.closest('.message');
-                return msg ? msg.id : null;
-            }})()
-        """
-        self.chat_view.page().runJavaScript(js_code, self._show_chat_menu_callback)
-    
-    def _show_chat_menu_callback(self, element_id):
-        """Callback with element ID."""
-        if not element_id or not element_id.startswith('msg-'):
-            return
-        
-        uid = element_id.replace('msg-', '')
-        menu = QMenu(self)
-        
-        copy_action = menu.addAction(f"复制UID: {uid[:8]}...")
-        copy_action.triggered.connect(lambda: self._copy_uid_to_clipboard(uid))
-        
-        menu.exec(QCursor.pos())
-    
-    def _copy_uid_to_clipboard(self, uid: str):
-        """Copy UID to system clipboard."""
-        clipboard = QApplication.clipboard()
-        clipboard.setText(uid)
-        self.statusBar().showMessage(f"已复制UID: {uid}", 3000)
-
     def _init_client(self):
         default = self.key_manager.get_default_key()
         if default:

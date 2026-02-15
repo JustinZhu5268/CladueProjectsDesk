@@ -114,13 +114,6 @@ body {
     cursor: pointer; 
 }
 .uid-link:hover { text-decoration: underline; }
-.msg-copy { 
-    margin-left: 8px; 
-    cursor: pointer; 
-    opacity: 0.7; 
-    user-select: none; 
-}
-.msg-copy:hover { opacity: 1; }
 pre { 
     background: %(code_bg)s; 
     padding: 12px; 
@@ -145,11 +138,6 @@ code {
 </div>
 
 <script type="text/javascript">
-if (typeof qt !== 'undefined' && qt.webChannelTransport) {
-    new QWebChannel(qt.webChannelTransport, function(channel) {
-        window.chatHost = channel.objects.chatHost;
-    });
-}
 // Global message storage
 var messageStore = {};
 
@@ -187,16 +175,18 @@ function addMessage(role, htmlContent, metaInfo, uid) {
                 if (window.chatHost) window.chatHost.insertRef('@#' + uid);
             };
             metaDiv.appendChild(uidSpan);
-            var copySpan = document.createElement('span');
-            copySpan.className = 'msg-copy';
-            copySpan.title = 'Copy';
-            copySpan.textContent = ' \uD83D\uDCCB';
-            copySpan.onclick = function(ev) {
-                ev.preventDefault();
-                ev.stopPropagation();
+            
+            // Copy message button
+            var copyBtn = document.createElement('span');
+            copyBtn.className = 'msg-copy-btn';
+            copyBtn.textContent = '复制';
+            copyBtn.title = '复制消息';
+            copyBtn.style.cssText = 'cursor:pointer;margin-left:10px;padding:2px 8px;background:#666;color:#fff;border-radius:3px;font-size:11px;';
+            copyBtn.onclick = function(e) {
+                e.stopPropagation();
                 copyMessageText(uid);
             };
-            metaDiv.appendChild(copySpan);
+            metaDiv.appendChild(copyBtn);
         }
         msgDiv.appendChild(metaDiv);
     }
