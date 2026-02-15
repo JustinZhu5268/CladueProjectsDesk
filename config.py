@@ -92,7 +92,7 @@ MODELS: dict[str, ModelInfo] = {
     ),
 }
 
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
 # Cache pricing multipliers
 CACHE_WRITE_MULTIPLIER = 1.25   # 1.25x base input price

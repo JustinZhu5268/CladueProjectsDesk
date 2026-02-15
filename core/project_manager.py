@@ -17,7 +17,7 @@ class Project:
     id: str
     name: str
     system_prompt: str = ""
-    default_model: str = "claude-sonnet-4-5-20250929"
+    default_model: str = "claude-haiku-4-5-20251001"
     api_key_id: str | None = None
     created_at: str = ""
     updated_at: str = ""

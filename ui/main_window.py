@@ -7,6 +7,7 @@ import base64
 import json
 import time
 import logging
+import atexit
 from pathlib import Path
 from functools import partial
 import re
@@ -53,6 +54,50 @@ from data.database import db
 log = logging.getLogger(__name__)
 
 
+# ── App State File (for persisting last conversation) ───────────────────────
+APP_STATE_FILE = Path.home() / APP_NAME / "app_state.json"
+
+def _load_app_state() -> dict:
+    """Load app state from JSON file."""
+    try:
+        if APP_STATE_FILE.exists():
+            with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_app_state(state: dict) -> None:
+    """Save app state to JSON file."""
+    try:
+        APP_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(APP_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+# Register save on exit
+atexit.register(lambda: _save_app_state(_app_state_cache))
+
+# In-memory cache for app state
+_app_state_cache: dict = {}
+
+def _get_app_state() -> dict:
+    """Get cached app state, loading if needed."""
+    global _app_state_cache
+    if not _app_state_cache:
+        _app_state_cache = _load_app_state()
+    return _app_state_cache
+
+def _set_app_state_value(key: str, value) -> None:
+    """Set a value in app state and persist."""
+    global _app_state_cache
+    state = _get_app_state()
+    state[key] = value
+    _app_state_cache = state
+    _save_app_state(state)
+
+
 class ChatBridge(QObject):
     """Exposed to chat page via QWebChannel: insert ref text into input."""
 
@@ -73,6 +118,30 @@ class ChatBridge(QObject):
     def showStatus(self, message: str) -> None:
         """Show status message in main window."""
         self._main_window.statusBar().showMessage(message, 3000)
+
+    @Slot(str, str)
+    def downloadMarkdown(self, content: str, filename: str) -> None:
+        """Download Markdown content as a file."""
+        from pathlib import Path
+        from PySide6.QtWidgets import QFileDialog
+        
+        # 使用用户建议的默认文件名
+        default_name = filename if filename else "document.md"
+        
+        path, _ = QFileDialog.getSaveFileName(
+            self._main_window, 
+            "保存 Markdown 文件", 
+            default_name,
+            "Markdown (*.md)"
+        )
+        
+        if path:
+            try:
+                Path(path).write_text(content, encoding="utf-8")
+                self._main_window.statusBar().showMessage(f"已保存: {path}", 3000)
+            except Exception as e:
+                log.error("Failed to save markdown file: %s", e)
+                self._main_window.statusBar().showMessage(f"保存失败: {str(e)}", 3000)
 
 
 class ChatWebPage(QWebEnginePage):
@@ -170,6 +239,8 @@ class MainWindow(QMainWindow):
         self.worker: APIWorker | None = None
         self.is_streaming = False
         self._accumulated_thinking = ""
+        self._inject_chat_history_connected = False
+        self._pending_history_messages = None
 
         self._build_ui()
         self._setup_shortcuts()
@@ -537,8 +608,28 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, p.id)
             self.project_list.addItem(item)
 
-        if projects and not self.current_project:
+        # 恢复最后选择的项目和对话
+        state = _get_app_state()
+        last_project_id = state.get("last_project_id")
+        last_conversation_id = state.get("last_conversation_id")
+        
+        # 尝试选中最后项目
+        if last_project_id:
+            for i in range(self.project_list.count()):
+                if self.project_list.item(i).data(Qt.ItemDataRole.UserRole) == last_project_id:
+                    self.project_list.setCurrentRow(i)
+                    break
+            else:
+                # 如果没找到，使用第一个项目
+                if projects:
+                    self.project_list.setCurrentRow(0)
+        elif projects and not self.current_project:
             self.project_list.setCurrentRow(0)
+        
+        # 如果有最后对话ID且当前项目匹配，加载该对话
+        if last_conversation_id and self.current_project:
+            # 延迟执行，确保对话列表已加载
+            QTimer.singleShot(100, lambda: self._restore_last_conversation(last_conversation_id))
 
     def _new_project(self):
         name, ok = QInputDialog.getText(self, "New Project", "Project name:")
@@ -568,6 +659,9 @@ class MainWindow(QMainWindow):
         self._update_stats()
         self.statusBar().showMessage(f"Project: {self.current_project.name}")
         log.debug("Selected project: %s", self.current_project.name)
+        
+        # 保存最后选择的项目ID
+        _set_app_state_value("last_project_id", self.current_project.id)
 
     def _project_context_menu(self, pos):
         item = self.project_list.itemAt(pos)
@@ -588,6 +682,19 @@ class MainWindow(QMainWindow):
                 self.project_mgr.delete(pid)
                 self.current_project = None
                 self._refresh_projects()
+
+    def _restore_last_conversation(self, conversation_id: str):
+        """Restore the last selected conversation by ID."""
+        if not self.current_project:
+            return
+        # 查找并选中指定对话
+        for i in range(self.conv_list.count()):
+            item = self.conv_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == conversation_id:
+                self.conv_list.setCurrentRow(i)
+                log.debug("Restored last conversation: %s", conversation_id)
+                return
+        log.debug("Last conversation not found: %s", conversation_id)
 
     def _refresh_conversations(self):
         self.conv_list.clear()
@@ -627,6 +734,12 @@ class MainWindow(QMainWindow):
         self._load_chat_history()
         self._update_stats()
         log.debug("Selected conversation: %s", self.current_conv.title if self.current_conv else "None")
+        
+        # 保存最后选择的对话ID
+        if self.current_conv:
+            _set_app_state_value("last_conversation_id", self.current_conv.id)
+            if self.current_project:
+                _set_app_state_value("last_project_id", self.current_project.id)
 
     def _conv_context_menu(self, pos):
         item = self.conv_list.itemAt(pos)
@@ -737,20 +850,24 @@ class MainWindow(QMainWindow):
         if not messages:
             return
         self._pending_history_messages = messages
-        try:
-            self.chat_view.page().loadFinished.disconnect(self._inject_chat_history)
-        except (TypeError, RuntimeError):
-            pass
+        
+        # 安全处理信号连接
+        self._inject_chat_history_connected = True
         self.chat_view.page().loadFinished.connect(self._inject_chat_history)
 
     def _inject_chat_history(self, ok: bool):
         """Run after chat page load: inject message history (fixes addMessage not defined)."""
         if not self._pending_history_messages:
             return
-        try:
-            self.chat_view.page().loadFinished.disconnect(self._inject_chat_history)
-        except (TypeError, RuntimeError):
-            pass
+        
+        # 断开信号连接，避免重复触发
+        if getattr(self, '_inject_chat_history_connected', False):
+            try:
+                self.chat_view.page().loadFinished.disconnect(self._inject_chat_history)
+            except (TypeError, RuntimeError):
+                pass
+            self._inject_chat_history_connected = False
+        
         messages = self._pending_history_messages
         self._pending_history_messages = None
         # #region agent log
@@ -936,6 +1053,7 @@ class MainWindow(QMainWindow):
         final_html = render_markdown(full_text)
         escaped = escape_js_string(final_html)
         escaped_meta = escape_js_string(meta)
+        escaped_raw = escape_js_string(full_text)  # 原始 Markdown
 
         if self.current_conv and full_text.strip():
             msg = self.conv_mgr.add_message(
@@ -949,7 +1067,7 @@ class MainWindow(QMainWindow):
                 cost_usd=cost,
             )
             msg_uid = msg.id
-            js_code = f"finishStreaming('{escaped}', '{escaped_meta}', '{msg_uid}')"
+            js_code = f"finishStreaming('{escaped}', '{escaped_meta}', '{msg_uid}', '{escaped_raw}')"
             self.chat_view.page().runJavaScript(js_code)
 
         self._update_stats()

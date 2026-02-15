@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     system_prompt TEXT DEFAULT '',
-    default_model TEXT NOT NULL DEFAULT 'claude-sonnet-4-5-20250929',
+    default_model TEXT NOT NULL DEFAULT 'claude-haiku-4-5-20251001',
     api_key_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
