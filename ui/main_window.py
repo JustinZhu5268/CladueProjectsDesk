@@ -323,6 +323,77 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(top_bar)
 
+        # PRD v3 §8.6: 搜索栏
+        search_bar = QFrame()
+        search_bar.setStyleSheet("""
+            QFrame { 
+                background: #2A2A2A; 
+                border-bottom: 1px solid #3A3A3A; 
+                padding: 4px;
+            }
+        """)
+        search_layout = QHBoxLayout(search_bar)
+        search_layout.setContentsMargins(12, 4, 12, 4)
+        
+        search_layout.addWidget(QLabel("🔍"))
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("搜索当前对话... (Ctrl+F)")
+        self.search_box.setStyleSheet("""
+            QLineEdit {
+                background: #3A3A3A;
+                color: #E5E5E5;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            QLineEdit:focus {
+                border-color: #D97706;
+            }
+        """)
+        self.search_box.setMinimumWidth(250)
+        self.search_box.returnPressed.connect(self._search_messages)
+        search_layout.addWidget(self.search_box)
+        
+        self.btn_search_prev = QPushButton("↑")
+        self.btn_search_prev.setFixedSize(28, 28)
+        self.btn_search_prev.setToolTip("上一条匹配")
+        self.btn_search_prev.setStyleSheet("""
+            QPushButton { background: #3A3A3A; color: #AAA; border: 1px solid #555; border-radius: 4px; }
+            QPushButton:hover { background: #454545; color: #FFF; }
+        """)
+        self.btn_search_prev.clicked.connect(self._search_prev)
+        search_layout.addWidget(self.btn_search_prev)
+        
+        self.btn_search_next = QPushButton("↓")
+        self.btn_search_next.setFixedSize(28, 28)
+        self.btn_search_next.setToolTip("下一条匹配")
+        self.btn_search_next.setStyleSheet("""
+            QPushButton { background: #3A3A3A; color: #AAA; border: 1px solid #555; border-radius: 4px; }
+            QPushButton:hover { background: #454545; color: #FFF; }
+        """)
+        self.btn_search_next.clicked.connect(self._search_next)
+        search_layout.addWidget(self.btn_search_next)
+        
+        self.search_result_label = QLabel("")
+        self.search_result_label.setStyleSheet("color: #888; font-size: 11px;")
+        search_layout.addWidget(self.search_result_label)
+        
+        search_layout.addStretch()
+        
+        # 关闭搜索栏按钮
+        btn_close_search = QPushButton("✕")
+        btn_close_search.setFixedSize(24, 24)
+        btn_close_search.setStyleSheet("""
+            QPushButton { background: transparent; color: #888; border: none; font-size: 14px; }
+            QPushButton:hover { color: #E74C3C; }
+        """)
+        btn_close_search.clicked.connect(self._close_search)
+        search_layout.addWidget(btn_close_search)
+        
+        self.search_bar = search_bar
+        self.search_bar.setVisible(False)  # 默认隐藏
+        main_layout.addWidget(self.search_bar)
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         left_panel = QWidget()
@@ -483,6 +554,38 @@ class MainWindow(QMainWindow):
         self.stats_label.setStyleSheet("color: #666; font-size: 12px;")
         right_layout.addWidget(self.stats_label)
 
+        # PRD v3: 4层缓存可视化仪表盘
+        sep4 = QFrame()
+        sep4.setFrameShape(QFrame.Shape.HLine)
+        right_layout.addWidget(sep4)
+        
+        right_layout.addWidget(QLabel(" **4-Layer Cache**"))
+        
+        # Layer 1: System + Docs
+        self.layer1_label = QLabel("L1: System+Docs -")
+        self.layer1_label.setStyleSheet("color: #4CAF50; font-size: 11px;")
+        right_layout.addWidget(self.layer1_label)
+        
+        # Layer 2: Rolling Summary
+        self.layer2_label = QLabel("L2: Summary -")
+        self.layer2_label.setStyleSheet("color: #2196F3; font-size: 11px;")
+        right_layout.addWidget(self.layer2_label)
+        
+        # Layer 3: Recent Messages
+        self.layer3_label = QLabel("L3: Recent -")
+        self.layer3_label.setStyleSheet("color: #FF9800; font-size: 11px;")
+        right_layout.addWidget(self.layer3_label)
+        
+        # Layer 4: Current Message
+        self.layer4_label = QLabel("L4: Current -")
+        self.layer4_label.setStyleSheet("color: #9C27B0; font-size: 11px;")
+        right_layout.addWidget(self.layer4_label)
+        
+        # Total tokens
+        self.total_tokens_label = QLabel("Total: 0 / 200K")
+        self.total_tokens_label.setStyleSheet("color: #666; font-size: 11px; font-weight: bold;")
+        right_layout.addWidget(self.total_tokens_label)
+
         right_layout.addStretch()
 
         right_panel.setFixedWidth(RIGHT_PANEL_WIDTH)
@@ -504,11 +607,108 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(self._open_settings)
         QShortcut(QKeySequence("Ctrl+L"), self).activated.connect(self.input_box.setFocus)
         QShortcut(QKeySequence("Escape"), self).activated.connect(self._cancel_streaming)
+        # PRD v3 §8.6: 对话内搜索
+        QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(self._toggle_search)
     
     def _setup_context_menu(self):
         """Disable default context menu."""
         self.chat_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-    
+
+    # PRD v3 §8.6: 对话内搜索功能
+    def _toggle_search(self):
+        """Toggle search bar visibility (Ctrl+F)."""
+        if self.search_bar.isVisible():
+            self._close_search()
+        else:
+            self.search_bar.setVisible(True)
+            self.search_box.setFocus()
+            self.search_box.selectAll()
+
+    def _close_search(self):
+        """Close search bar and clear search results."""
+        self.search_bar.setVisible(False)
+        self.search_box.clear()
+        self.search_result_label.setText("")
+        self._search_matches = []
+        self._current_match_index = 0
+        # 清除搜索高亮
+        self.chat_view.page().runJavaScript("clearSearch()")
+
+    def _search_messages(self):
+        """Search messages in current conversation."""
+        query = self.search_box.text().strip().lower()
+        
+        if not query:
+            self.search_result_label.setText("")
+            self._search_matches = []
+            self.chat_view.page().runJavaScript("clearSearch()")
+            return
+        
+        if not self.current_conv:
+            self.search_result_label.setText("请先选择一个对话")
+            return
+        
+        # 获取当前对话的所有消息
+        messages = self.conv_mgr.get_messages(self.current_conv.id)
+        
+        # 搜索匹配的消息
+        self._search_matches = []
+        for i, msg in enumerate(messages):
+            if query in msg.content.lower():
+                self._search_matches.append({
+                    'index': i,
+                    'uid': msg.id,
+                    'role': msg.role,
+                    'preview': msg.content[:100].replace('\n', ' ')
+                })
+        
+        if not self._search_matches:
+            self.search_result_label.setText(f"未找到匹配: {query}")
+            self.chat_view.page().runJavaScript("clearSearch()")
+            return
+        
+        # 显示结果数量
+        self._current_match_index = 0
+        self.search_result_label.setText(f"找到 {len(self._search_matches)} 条匹配")
+        
+        # 在 WebView 中高亮显示匹配
+        self._highlight_search_results(query)
+
+    def _highlight_search_results(self, query: str):
+        """Highlight search matches in the chat view."""
+        # 将所有匹配的消息UID传给JS
+        uids = [m['uid'] for m in self._search_matches]
+        escaped_query = query.replace("'", "\\'")
+        escaped_uids = json.dumps(uids)
+        js_code = f"highlightSearch('{escaped_query}', {escaped_uids}, {self._current_match_index})"
+        self.chat_view.page().runJavaScript(js_code)
+
+    def _search_next(self):
+        """Go to next search match."""
+        if not self._search_matches:
+            return
+        
+        self._current_match_index = (self._current_match_index + 1) % len(self._search_matches)
+        self.search_result_label.setText(f"匹配 {self._current_match_index + 1}/{len(self._search_matches)}")
+        
+        # 更新高亮
+        query = self.search_box.text().strip().lower()
+        if query:
+            self._highlight_search_results(query)
+
+    def _search_prev(self):
+        """Go to previous search match."""
+        if not self._search_matches:
+            return
+        
+        self._current_match_index = (self._current_match_index - 1) % len(self._search_matches)
+        self.search_result_label.setText(f"匹配 {self._current_match_index + 1}/{len(self._search_matches)}")
+        
+        # 更新高亮
+        query = self.search_box.text().strip().lower()
+        if query:
+            self._highlight_search_results(query)
+
     def _init_client(self):
         default = self.key_manager.get_default_key()
         if default:
@@ -946,6 +1146,55 @@ class MainWindow(QMainWindow):
             f"{compression_text}"
         )
         self.stats_label.setText(txt)
+        
+        # 更新 4 层缓存可视化
+        self._update_cache_visualization()
+    
+    def _update_cache_visualization(self):
+        """更新4层缓存可视化仪表盘"""
+        if not self.current_conv:
+            self.layer1_label.setText("L1: System+Docs -")
+            self.layer2_label.setText("L2: Summary -")
+            self.layer3_label.setText("L3: Recent -")
+            self.layer4_label.setText("L4: Current -")
+            self.total_tokens_label.setText("Total: 0 / 200K")
+            return
+        
+        # 从 context_builder 获取当前层的 token 统计
+        from core.context_builder import ContextBuilder
+        cb = ContextBuilder()
+        
+        try:
+            # 预估请求
+            est = cb.estimate_request(
+                project_id=self.current_project.id if self.current_project else "",
+                conversation_id=self.current_conv.id,
+                user_message="",
+                system_prompt=self.current_project.system_prompt if self.current_project else "",
+                model_id=self.current_conv.model_override or "claude-sonnet-4-5-20250929"
+            )
+            
+            # 更新各层显示
+            sys_tok = est.get("system_tokens", 0)
+            sum_tok = est.get("summary_tokens", 0)
+            hist_tok = est.get("history_tokens", 0)
+            user_tok = est.get("user_tokens", 0)
+            total = est.get("total_tokens", 0)
+            
+            self.layer1_label.setText(f"L1: System+Docs {sys_tok:,} tok")
+            self.layer2_label.setText(f"L2: Summary {sum_tok:,} tok")
+            self.layer3_label.setText(f"L3: Recent {hist_tok:,} tok")
+            self.layer4_label.setText(f"L4: Current {user_tok:,} tok")
+            self.total_tokens_label.setText(f"Total: {total:,} / 200K")
+            
+            # 根据缓存状态改变颜色
+            if sum_tok >= 1024:
+                self.layer2_label.setStyleSheet("color: #4CAF50; font-size: 11px;")  # 绿色 = 缓存
+            else:
+                self.layer2_label.setStyleSheet("color: #FF9800; font-size: 11px;")  # 橙色 = 未缓存
+                
+        except Exception as e:
+            log.debug(f"Cache visualization update failed: {e}")
 
     def _send_message(self):
         if self.is_streaming:
@@ -1307,6 +1556,30 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_settings_changed(self):
+        # PRD v3 §8.5: 主题切换支持
+        from utils.theme_manager import LIGHT_THEME, DARK_THEME
+        import json
+        from pathlib import Path
+        
+        # 重新加载主题
+        try:
+            theme_file = Path.home() / "ClaudeStation" / "theme_config.json"
+            if theme_file.exists():
+                with open(theme_file, "r", encoding="utf-8") as f:
+                    theme_data = json.load(f)
+                    theme_mode = theme_data.get("mode", "dark")
+                    
+                    # 获取 QApplication 实例
+                    from PySide6.QtWidgets import QApplication
+                    app = QApplication.instance()
+                    
+                    if theme_mode == "light":
+                        app.setStyleSheet(LIGHT_THEME)
+                    else:
+                        app.setStyleSheet(DARK_THEME)
+        except Exception as e:
+            log.warning(f"Failed to apply theme: {e}")
+        
         self._init_client()
         self.statusBar().showMessage("Settings updated")
 
