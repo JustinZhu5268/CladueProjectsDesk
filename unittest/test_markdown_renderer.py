@@ -105,14 +105,13 @@ class TestMarkdownRendererSecurity(unittest.TestCase):
         
         result = render_markdown("<script>alert('xss')</script>")
         
-        # The result should not contain executable script tags
-        # Depending on markdown library version, may escape or strip
-        # Check that it's either escaped or stripped
-        result_lower = result.lower()
+        # The script tag should not be executable
+        # Either it's escaped, stripped, or handled in some way
+        # Just verify it's not exposed as raw <script> tag
+        # (both lowercase and uppercase versions should be handled)
         self.assertTrue(
-            "&lt;script&gt;" in result_lower or 
-            "&lt;script" in result_lower or
-            "<script>" not in result
+            "<script>" not in result and
+            "<SCRIPT>" not in result.upper()
         )
     
     def test_escape_javascript_link(self):
@@ -121,22 +120,11 @@ class TestMarkdownRendererSecurity(unittest.TestCase):
         
         result = render_markdown("[link](javascript:alert('xss'))")
         
-        # The markdown library may or may not be available
-        # If available, the javascript: scheme should be neutralized
-        # If not available, the raw text is returned (which is fine for this test)
-        # Just check that if it's rendered, the javascript is handled
-        result_lower = result.lower()
-        
-        # If markdown is rendered (contains <a href), check for javascript
-        # If raw text returned (markdown not available), the test passes
-        if "<a href" in result_lower:
-            self.assertTrue(
-                "javascript:" not in result_lower or 
-                "&amp;" in result
-            )
-        else:
-            # Markdown library not available, raw text returned - test passes
-            self.assertIn("javascript", result_lower)
+        # The javascript: scheme should not be directly executable
+        # Check it's either escaped, removed, or the link doesn't work
+        # For basic test: just ensure it's not a direct javascript: link
+        result_no_spaces = result.replace(" ", "")
+        self.assertFalse("href=\"javascript:" in result_no_spaces or "href='javascript:" in result_no_spaces)
     
     def test_escape_onclick(self):
         """Test that onClick attributes are escaped"""
@@ -144,14 +132,14 @@ class TestMarkdownRendererSecurity(unittest.TestCase):
         
         result = render_markdown("<img onclick='alert(1)'>")
         
-        # The onclick should be escaped or the tag should be modified
-        # Check that it's either escaped or handled
+        # The onclick should not be directly executable
+        # Either escaped or stripped
+        # Check that onclick is not present as a raw attribute
         result_lower = result.lower()
-        self.assertTrue(
-            "&lt;img" in result_lower or
-            "onclick" not in result_lower or
-            "&amp;" in result
-        )
+        # The result should either have escaped onclick or no onclick at all
+        has_onclick_raw = "onclick=" in result_lower and "alert" in result_lower
+        has_escaped = "&lt;img" in result_lower or "&lt;input" in result_lower
+        self.assertTrue(not has_onclick_raw or has_escaped)
 
 
 class TestChatHtmlTemplate(unittest.TestCase):
