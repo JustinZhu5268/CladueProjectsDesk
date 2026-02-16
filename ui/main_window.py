@@ -1468,18 +1468,12 @@ class MainWindow(QMainWindow):
             try:
                 result = compressor.compress(self.current_conv.id, self.current_project.name)
                 
-                # 在主线程更新 UI
-                from PySide6.QtCore import QMetaObject, Qt
+                # 在主线程更新 UI - 使用 QTimer.singleShot 代替 QMetaObject.invokeMethod
+                from PySide6.QtCore import QTimer
                 if result and result.success:
                     saved = result.tokens_saved
-                    QMetaObject.invokeMethod(
-                        self.statusBar(), 
-                        "showMessage", 
-                        Qt.QueuedConnection,
-                        "".encode('utf-8'),
-                        "".encode('utf-8'),
-                        5000
-                    )
+                    msg = f"历史记忆已更新，节省 {saved:,} tokens" if saved > 0 else "历史记忆已更新"
+                    QTimer.singleShot(0, lambda: self.statusBar().showMessage(msg, 5000))
                     log.info("Compression complete: saved %d tokens", saved)
                 else:
                     error_msg = result.error if result else "Unknown error"
