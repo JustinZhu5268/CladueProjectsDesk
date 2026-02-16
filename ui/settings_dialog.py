@@ -108,6 +108,12 @@ class SettingsDialog(QDialog):
         gen_layout = QVBoxLayout(gen_tab)
         gen_form = QFormLayout()
 
+        # PRD v3 §8.5: 主题选择
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("暗色 (Dark)", "dark")
+        self.theme_combo.addItem("亮色 (Light)", "light")
+        gen_form.addRow("主题 Theme:", self.theme_combo)
+
         self.default_model = QComboBox()
         for mid, minfo in MODELS.items():
             self.default_model.addItem(
@@ -168,6 +174,35 @@ class SettingsDialog(QDialog):
         cost_info.setStyleSheet("color: #888; font-size: 11px; padding: 10px;")
         token_layout.addWidget(cost_info)
         
+        # PRD v3 §8.4: 重置摘要按钮
+        reset_group = QGroupBox("重置对话摘要 (Reset Summary)")
+        reset_layout = QVBoxLayout(reset_group)
+        
+        reset_desc = QLabel(
+            "清除当前对话的累积摘要，强制下一次请求发送全量历史。\n"
+            "适用于摘要出现错误信息、需要重新开始对话上下文的场景。"
+        )
+        reset_desc.setStyleSheet("color: #666; font-size: 11px;")
+        reset_layout.addWidget(reset_desc)
+        
+        self.btn_reset_summary = QPushButton("清除当前对话摘要")
+        self.btn_reset_summary.setStyleSheet("""
+            QPushButton {
+                background: #E74C3C;
+                color: white;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #C0392B;
+            }
+        """)
+        self.btn_reset_summary.clicked.connect(self._reset_summary)
+        reset_layout.addWidget(self.btn_reset_summary)
+        
+        token_layout.addWidget(reset_group)
+        
         token_layout.addStretch()
         tabs.addTab(token_tab, "Token 策略")
 
@@ -187,6 +222,21 @@ class SettingsDialog(QDialog):
     def _load(self):
         """Load existing settings."""
         self._refresh_key_list()
+        
+        # PRD v3 §8.5: 加载主题设置
+        try:
+            import json
+            from pathlib import Path
+            theme_file = Path.home() / "ClaudeStation" / "theme_config.json"
+            if theme_file.exists():
+                with open(theme_file, "r", encoding="utf-8") as f:
+                    theme_data = json.load(f)
+                    theme_mode = theme_data.get("mode", "dark")
+                    idx = self.theme_combo.findData(theme_mode)
+                    if idx >= 0:
+                        self.theme_combo.setCurrentIndex(idx)
+        except Exception:
+            pass
 
     def _refresh_key_list(self):
         self.key_list.clear()
@@ -260,6 +310,71 @@ class SettingsDialog(QDialog):
             return f"{ptype}://{user}:{pw}@{host}:{port}"
         return f"{ptype}://{host}:{port}"
 
+    def _reset_summary(self):
+        """Reset the rolling summary for the current conversation (PRD v3 §8.4)."""
+        from core.conversation_manager import ConversationManager
+        from data.database import db
+        
+        # 获取当前对话ID
+        from ui.main_window import _get_app_state
+        state = _get_app_state()
+        conversation_id = state.get("last_conversation_id")
+        
+        if not conversation_id:
+            QMessageBox.warning(
+                self, 
+                "无法重置", 
+                "请先选择一个对话，然后再尝试重置摘要。"
+            )
+            return
+        
+        # 确认对话框
+        reply = QMessageBox.question(
+            self,
+            "确认重置摘要",
+            "确定要清除当前对话的累积摘要吗？\n\n"
+            "这将强制下一次请求发送全量历史上下文。\n"
+            "适用于摘要出现错误、需要重新开始对话上下文的场景。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        try:
+            # 重置摘要
+            db.execute("""
+                UPDATE conversations 
+                SET rolling_summary = NULL, 
+                    last_compressed_msg_id = NULL, 
+                    summary_token_count = NULL
+                WHERE id = ?
+            """, (conversation_id,))
+            
+            QMessageBox.information(
+                self,
+                "重置成功",
+                "对话摘要已清除。\n\n"
+                "下一次对话请求将发送全量历史上下文。"
+            )
+            log.info("Reset rolling summary for conversation %s", conversation_id[:8])
+        except Exception as e:
+            QMessageBox.warning(self, "重置失败", f"无法重置摘要: {e}")
+            log.error("Failed to reset summary: %s", e)
+
     def _save(self):
+        # PRD v3 §8.5: 保存主题设置
+        theme_mode = self.theme_combo.currentData()
+        try:
+            import json
+            from pathlib import Path
+            theme_file = Path.home() / "ClaudeStation" / "theme_config.json"
+            theme_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(theme_file, "w", encoding="utf-8") as f:
+                json.dump({"mode": theme_mode}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.warning(f"Failed to save theme config: {e}")
+        
         self.settings_changed.emit()
         self.accept()

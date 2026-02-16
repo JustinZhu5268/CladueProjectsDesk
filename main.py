@@ -6,12 +6,39 @@ from __future__ import annotations
 
 import sys
 import logging
+import json
+from pathlib import Path
 
 # Must configure logging before any other imports
 from config import setup_logging, APP_NAME, APP_VERSION, LOG_PATH
 
 setup_logging()
 log = logging.getLogger(__name__)
+
+
+# 主题配置路径
+THEME_CONFIG_FILE = Path.home() / APP_NAME / "theme_config.json"
+
+
+def load_theme_config() -> dict:
+    """Load theme configuration from file."""
+    try:
+        if THEME_CONFIG_FILE.exists():
+            with open(THEME_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"mode": "dark"}
+
+
+def save_theme_config(config: dict) -> None:
+    """Save theme configuration to file."""
+    try:
+        THEME_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(THEME_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def main():
@@ -59,202 +86,18 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
 
-    # Apply basic stylesheet
-        # 应用暗黑样式表
-    app.setStyleSheet("""
-    QMainWindow { background: #1E1E1E; color: #E5E5E5; }
+    # PRD v3 §8.5: 支持亮色/暗色主题
+    from utils.theme_manager import LIGHT_THEME, DARK_THEME
     
-    /* 菜单栏 */
-    QMenuBar { background: #2D2D2D; color: #E5E5E5; }
-    QMenuBar::item:selected { background: #404040; }
-    QMenu { background: #2D2D2D; color: #E5E5E5; border: 1px solid #404040; }
-    QMenu::item:selected { background: #404040; }
+    theme_config = load_theme_config()
+    theme_mode = theme_config.get("mode", "dark")
     
-    /* 列表控件 */
-    QListWidget {
-        border: 1px solid #3A3A3A;
-        border-radius: 6px;
-        background: #252525;
-        color: #E5E5E5;
-        font-size: 13px;
-        outline: none;
-        padding: 4px;
-    }
-    QListWidget::item {
-        padding: 8px 12px;
-        border-radius: 4px;
-        margin: 2px 0;
-    }
-    QListWidget::item:selected {
-        background: #0D5CB6;
-        color: #FFFFFF;
-    }
-    QListWidget::item:hover {
-        background: #3A3A3A;
-    }
-    
-    /* 按钮 */
-    QPushButton {
-        padding: 6px 14px;
-        border: 1px solid #3A3A3A;
-        border-radius: 6px;
-        background: #2D2D2D;
-        color: #E5E5E5;
-        font-size: 13px;
-        font-weight: 500;
-    }
-    QPushButton:hover {
-        background: #3A3A3A;
-        border-color: #4A4A4A;
-    }
-    QPushButton:pressed {
-        background: #404040;
-    }
-    QPushButton:disabled {
-        color: #666666;
-        background: #252525;
-    }
-    
-    /* 下拉框 */
-    QComboBox {
-        padding: 6px 10px;
-        border: 1px solid #3A3A3A;
-        border-radius: 6px;
-        background: #252525;
-        color: #E5E5E5;
-        font-size: 13px;
-        min-width: 200px;
-    }
-    QComboBox:hover {
-        border-color: #4A4A4A;
-    }
-    QComboBox::drop-down {
-        border: none;
-        width: 30px;
-    }
-    QComboBox QAbstractItemView {
-        background: #2D2D2D;
-        color: #E5E5E5;
-        border: 1px solid #3A3A3A;
-        selection-background-color: #0D5CB6;
-    }
-    
-    /* 文本输入框 */
-    QTextEdit, QPlainTextEdit {
-        border: 1px solid #3A3A3A;
-        border-radius: 8px;
-        padding: 10px;
-        font-size: 14px;
-        background: #252525;
-        color: #E5E5E5;
-        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-        selection-background-color: #0D5CB6;
-    }
-    QTextEdit:focus, QPlainTextEdit:focus {
-        border-color: #0D5CB6;
-    }
-    
-    /* 单行输入 */
-    QLineEdit {
-        padding: 6px 10px;
-        border: 1px solid #3A3A3A;
-        border-radius: 6px;
-        background: #252525;
-        color: #E5E5E5;
-        font-size: 13px;
-    }
-    QLineEdit:focus {
-        border-color: #0D5CB6;
-    }
-    
-    /* 标签 */
-    QLabel { 
-        font-size: 13px; 
-        color: #E5E5E5; 
-    }
-    
-    /* 分组框 */
-    QGroupBox { 
-        font-weight: bold; 
-        border: 1px solid #3A3A3A; 
-        border-radius: 8px; 
-        margin-top: 12px; 
-        padding-top: 16px;
-        padding: 12px;
-        color: #E5E5E5;
-    }
-    QGroupBox::title {
-        subcontrol-origin: margin;
-        left: 12px;
-        padding: 0 8px;
-        color: #AAAAAA;
-    }
-    
-    /* 复选框 */
-    QCheckBox { 
-        font-size: 13px; 
-        color: #E5E5E5;
-        spacing: 8px;
-    }
-    QCheckBox::indicator {
-        width: 18px;
-        height: 18px;
-        border: 2px solid #3A3A3A;
-        border-radius: 4px;
-        background: #252525;
-    }
-    QCheckBox::indicator:checked {
-        background: #0D5CB6;
-        border-color: #0D5CB6;
-    }
-    
-    /* 状态栏 */
-    QStatusBar { 
-        font-size: 12px; 
-        color: #888888;
-        background: #252525;
-        border-top: 1px solid #3A3A3A;
-    }
-    
-    /* 滚动条 */
-    QScrollBar:vertical {
-        background: #252525;
-        width: 12px;
-        border-radius: 6px;
-    }
-    QScrollBar::handle:vertical {
-        background: #3A3A3A;
-        border-radius: 6px;
-        min-height: 30px;
-    }
-    QScrollBar::handle:vertical:hover {
-        background: #4A4A4A;
-    }
-    
-    /* 分割条 */
-    QSplitter::handle {
-        background: #3A3A3A;
-    }
-    QSplitter::handle:horizontal {
-        width: 2px;
-    }
-    
-    /* 标签页 */
-    QTabWidget::pane { 
-        border: 1px solid #3A3A3A; 
-        background: #252525;
-    }
-    QTabBar::tab {
-        background: #2D2D2D;
-        color: #888888;
-        padding: 8px 16px;
-        border: none;
-    }
-    QTabBar::tab:selected {
-        background: #0D5CB6;
-        color: #FFFFFF;
-    }
-    """)
+    # 根据保存的配置应用主题
+    if theme_mode == "light":
+        app.setStyleSheet(LIGHT_THEME)
+    else:
+        app.setStyleSheet(DARK_THEME)
+
     # Create and show main window
     from ui.main_window import MainWindow
     window = MainWindow()

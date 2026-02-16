@@ -180,6 +180,11 @@ code {
 .msg-copy-btn:hover {
     background: #5A5A5A;
 }
+
+/* PRD v3 §8.6: 搜索高亮样式 */
+.message.search-match {
+    outline: 3px solid #D97706;
+}
 </style>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 </head>
@@ -420,6 +425,54 @@ window.appendStreamText = appendStreamText;
 window.finishStreaming = finishStreaming;
 window.addError = addError;
 window.clearChat = clearChat;
+
+// PRD v3 §8.6: 对话内搜索功能
+var currentSearchQuery = '';
+var searchMatchUids = [];
+var currentMatchIndex = 0;
+
+function highlightSearch(query, uids, matchIndex) {
+    currentSearchQuery = query;
+    searchMatchUids = uids || [];
+    currentMatchIndex = matchIndex || 0;
+    
+    if (!query || searchMatchUids.length === 0) {
+        clearSearch();
+        return;
+    }
+    
+    // 先清除所有高亮
+    var chatContainer = document.getElementById('chat');
+    var allMessages = chatContainer.querySelectorAll('.message');
+    for (var i = 0; i < allMessages.length; i++) {
+        allMessages[i].style.outline = 'none';
+    }
+    
+    // 高亮当前匹配
+    if (searchMatchUids[currentMatchIndex]) {
+        var currentUid = searchMatchUids[currentMatchIndex];
+        var currentMsg = document.getElementById('msg-' + currentUid);
+        if (currentMsg) {
+            currentMsg.style.outline = '3px solid #D97706';
+            currentMsg.scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+    }
+}
+
+function clearSearch() {
+    currentSearchQuery = '';
+    searchMatchUids = [];
+    currentMatchIndex = 0;
+    
+    var chatContainer = document.getElementById('chat');
+    var allMessages = chatContainer.querySelectorAll('.message');
+    for (var i = 0; i < allMessages.length; i++) {
+        allMessages[i].style.outline = 'none';
+    }
+}
+
+window.highlightSearch = highlightSearch;
+window.clearSearch = clearSearch;
 </script>
 </body>
 </html>""" % colors

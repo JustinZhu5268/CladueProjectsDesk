@@ -259,14 +259,32 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
+        # 获取当前主题颜色
+        top_bar_bg = "#252525"
+        top_bar_border = "#3A3A3A"
+        label_color = "#AAAAAA"
+        try:
+            import json
+            from pathlib import Path
+            theme_file = Path.home() / "ClaudeStation" / "theme_config.json"
+            if theme_file.exists():
+                with open(theme_file, "r", encoding="utf-8") as f:
+                    theme_data = json.load(f)
+                    if theme_data.get("mode") == "light":
+                        top_bar_bg = "#F5F5F0"
+                        top_bar_border = "#CCCCCC"
+                        label_color = "#1A1A1A"
+        except:
+            pass
+        
         top_bar = QFrame()
-        top_bar.setStyleSheet("""
-            QFrame { 
-                background: #252525; 
-                border-bottom: 1px solid #3A3A3A; 
+        top_bar.setStyleSheet(f"""
+            QFrame {{ 
+                background: {top_bar_bg}; 
+                border-bottom: 1px solid {top_bar_border}; 
                 padding: 4px; 
-            }
-            QLabel { color: #AAAAAA; font-size: 13px; }
+            }}
+            QLabel {{ color: {label_color}; font-size: 13px; }}
         """)
         top_layout = QHBoxLayout(top_bar)
         top_layout.setContentsMargins(12, 6, 12, 6)
@@ -457,12 +475,28 @@ class MainWindow(QMainWindow):
         self.chat_view = QWebEngineView()
         center_layout.addWidget(self.chat_view, 1)
 
+        # 获取当前主题颜色
+        input_bg = "#252525"
+        input_border = "#3A3A3A"
+        try:
+            import json
+            from pathlib import Path
+            theme_file = Path.home() / "ClaudeStation" / "theme_config.json"
+            if theme_file.exists():
+                with open(theme_file, "r", encoding="utf-8") as f:
+                    theme_data = json.load(f)
+                    if theme_data.get("mode") == "light":
+                        input_bg = "#FFFFFF"
+                        input_border = "#DDDDDD"
+        except:
+            pass
+        
         input_frame = QFrame()
-        input_frame.setStyleSheet("""
-            QFrame { 
-                background: #252525; 
-                border-top: 1px solid #3A3A3A; 
-            }
+        input_frame.setStyleSheet(f"""
+            QFrame {{ 
+                background: {input_bg}; 
+                border-top: 1px solid {input_border}; 
+            }}
         """)
         input_layout = QVBoxLayout(input_frame)
         input_layout.setContentsMargins(12, 8, 12, 8)
