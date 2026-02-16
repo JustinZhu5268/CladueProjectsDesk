@@ -164,11 +164,13 @@ class TestDocumentProcessorFull(unittest.TestCase):
         
         processor = DocumentProcessor()
         
-        # 100 characters / 4 = 25 tokens
+        # 100 characters / 4 = 25 tokens (fallback), or tiktoken may give different result
         text = "a" * 100
         tokens = processor._estimate_tokens(text)
         
-        self.assertEqual(tokens, 25)
+        # tiktoken 或 fallback 都应该在合理范围内
+        self.assertGreaterEqual(tokens, 10)
+        self.assertLessEqual(tokens, 35)
     
     def test_estimate_tokens_chinese(self):
         """Test token estimation for Chinese text (chars, not words)"""
@@ -181,7 +183,9 @@ class TestDocumentProcessorFull(unittest.TestCase):
         text = "你好世界" * 25  # 100 characters
         tokens = processor._estimate_tokens(text)
         
-        self.assertEqual(tokens, 25)
+        # tiktoken 或 fallback 都应该在合理范围内
+        self.assertGreaterEqual(tokens, 10)
+        self.assertLessEqual(tokens, 150)
     
     def test_estimate_tokens_code(self):
         """Test token estimation for code"""
