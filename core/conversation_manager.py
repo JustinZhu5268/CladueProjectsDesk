@@ -197,10 +197,10 @@ class ConversationManager:
             created_at=row["created_at"], updated_at=row["updated_at"],
             is_archived=bool(row["is_archived"]),
             # 压缩相关字段 (PRD v3)
-            rolling_summary=row.get("rolling_summary") or "",
-            last_compressed_msg_id=row.get("last_compressed_msg_id"),
-            summary_token_count=row.get("summary_token_count") or 0,
-            compress_after_turns=row.get("compress_after_turns") or 10,
+            rolling_summary=row["rolling_summary"] if "rolling_summary" in row and row["rolling_summary"] else "",
+            last_compressed_msg_id=row["last_compressed_msg_id"] if "last_compressed_msg_id" in row and row["last_compressed_msg_id"] else None,
+            summary_token_count=row["summary_token_count"] if "summary_token_count" in row and row["summary_token_count"] is not None else 0,
+            compress_after_turns=row["compress_after_turns"] if "compress_after_turns" in row and row["compress_after_turns"] is not None else 10,
         )
 
     # ── Compression Methods ───────────────────────────

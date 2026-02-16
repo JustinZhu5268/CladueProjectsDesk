@@ -33,8 +33,13 @@ log = logging.getLogger(__name__)
 # Haiku 模型用于压缩 (最低成本)
 COMPRESS_MODEL = "claude-haiku-4-5-20251001"
 
-# 压缩提示词模板
-COMPRESS_SYSTEM_PROMPT = """You are a conversation summarizer for project '{project_name}'. 
+# 压缩提示词模板 - 提供模板变量版本供外部使用
+COMPRESS_SYSTEM_PROMPT_TEMPLATE = """You are a conversation summarizer for project '{project_name}'. 
+Output ONLY the summary in the same language as the conversation. 
+No preamble, no explanation."""
+
+# 内部使用：已格式化的系统提示词（无变量）
+COMPRESS_SYSTEM_PROMPT = """You are a conversation summarizer. 
 Output ONLY the summary in the same language as the conversation. 
 No preamble, no explanation."""
 

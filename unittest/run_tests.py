@@ -36,6 +36,8 @@ def discover_tests():
         "test_document_processor",
         "test_markdown_renderer",
         "test_claude_client",
+        # Integration tests
+        "test_integration",
     ]
     
     # Change to test directory to allow imports
