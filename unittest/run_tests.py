@@ -31,6 +31,11 @@ def discover_tests():
         "test_context_builder",
         "test_database",
         "test_conversation_manager",
+        # New test files (PRD v3 features)
+        "test_project_manager",
+        "test_document_processor",
+        "test_markdown_renderer",
+        "test_claude_client",
     ]
     
     # Change to test directory to allow imports
