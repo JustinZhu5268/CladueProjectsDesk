@@ -114,26 +114,6 @@ class Database:
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._conn is None:
-            # PRD v3: 检查是否有旧数据库需要迁移
-            old_paths = [
-                self.db_path.parent / "claude_station.db",
-                Path.home() / "ClaudeStation" / "claude_station.db",
-                Path.home() / ".claude_station" / "claude_station.db",
-            ]
-            
-            for old_path in old_paths:
-                if old_path != self.db_path and old_path.exists():
-                    log.info("Found old database at: %s", old_path)
-                    # 如果当前数据库为空，迁移旧数据
-                    if not self.db_path.exists() or self.db_path.stat().st_size < 1000:
-                        import shutil
-                        try:
-                            shutil.copy2(old_path, self.db_path)
-                            log.info("Migrated database from: %s", old_path)
-                            break
-                        except Exception as e:
-                            log.warning("Failed to migrate database: %s", e)
-            
             self._conn = sqlite3.connect(
                 str(self.db_path),
                 check_same_thread=False,
@@ -215,7 +195,7 @@ class Database:
                 shutil.copy2(self.db_path, backup_path)
                 log.info("Database backed up to: %s", backup_path)
                 # 重新连接
-                self._conn = sqlite3.connect(self._db_path)
+                self._conn = sqlite3.connect(self.db_path)
                 self._conn.row_factory = sqlite3.Row
             except Exception as e:
                 log.warning("Failed to backup database: %s", e)

@@ -1658,3 +1658,5 @@
 {"id": "log_1771245796688", "timestamp": 1771245796688, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
 {"id": "log_1771245812631", "timestamp": 1771245812631, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
 {"id": "log_1771245862397", "timestamp": 1771245862397, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
+{"id": "log_1771248578352", "timestamp": 1771248578352, "location": "main_window.py:254", "message": "setHtml called", "data": {"caller": "init"}, "hypothesisId": "H1"}
+{"id": "log_1771248580046", "timestamp": 1771248580046, "location": "main_window.py:689", "message": "setHtml called", "data": {"caller": "load_chat_history"}, "hypothesisId": "H1"}
