@@ -259,16 +259,13 @@ class ContextBuilder:
     def get_compaction_params(self, model_id: str) -> dict:
         """
         获取 Compaction API 兜底参数 (PRD v3)
+        
+        注意: 当前版本的 Anthropic SDK 不支持流式调用中的 betas 参数
+        因此返回空字典，实际的 compaction 由客户端滚动摘要处理
         """
-        return {
-            "betas": ["compact-2026-01-12"],
-            "context_management": {
-                "edits": [{
-                    "type": "compact_20260112",
-                    "trigger": {"type": "input_tokens", "value": COMPACTION_TRIGGER_TOKENS}
-                }]
-            }
-        }
+        # Compaction 由客户端主动压缩 (ContextCompressor) 处理
+        # 服务端 compaction 作为兜底方案，但需要 SDK 支持
+        return {}
 
     def _build_system_text(self, system_prompt: str, doc_context: str) -> str:
         """构建系统提示文本"""

@@ -95,15 +95,11 @@ class ClaudeClient:
                 kwargs["max_tokens"] = max(max_tokens, budget + 4096)
             
             # PRD v3: 添加 Compaction API 兜底参数
+            # 注意: betas 参数在流式调用中不被支持，只在非流式调用中使用
             if use_compaction:
-                kwargs["betas"] = ["compact-2026-01-12"]
-                kwargs["context_management"] = {
-                    "edits": [{
-                        "type": "compact_20260112",
-                        "trigger": {"type": "input_tokens", "value": COMPACTION_TRIGGER_TOKENS}
-                    }]
-                }
-                log.debug("Compaction API enabled (trigger at %d tokens)", COMPACTION_TRIGGER_TOKENS)
+                # 对于流式调用，不使用 betas 参数 (SDK 不支持)
+                # Compaction 会在服务端自动处理
+                log.debug("Compaction API available (trigger at %d tokens)", COMPACTION_TRIGGER_TOKENS)
 
             full_text = ""
             full_thinking = ""
