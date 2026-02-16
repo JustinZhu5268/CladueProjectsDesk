@@ -1073,6 +1073,19 @@ class MainWindow(QMainWindow):
         self.chat_view.setHtml(get_chat_html_template(dark_mode=True))
         self.stats_label.setText("No conversation selected")
 
+    def _ensure_chat_ready(self):
+        """确保聊天页面已准备好显示消息"""
+        # 如果聊天容器不存在，先初始化
+        js_check = """
+            (function() {
+                if (!document.getElementById('chat')) {
+                    document.body.innerHTML = '<div id="chat"></div>';
+                }
+                return !!document.getElementById('chat');
+            })();
+        """
+        self.chat_view.page().runJavaScript(js_check)
+
     def _load_chat_history(self):
         """Load and display all messages in current conversation."""
         # #region agent log
@@ -1249,10 +1262,23 @@ class MainWindow(QMainWindow):
                 return
 
         messages = self.conv_mgr.get_messages(self.current_conv.id)
-        if not messages:
+        is_first_message = len(messages) == 0
+        
+        if is_first_message:
+            # 新对话第一条消息：确保聊天页面已准备好
+            self._ensure_chat_ready()
+
+        if is_first_message:
             title = text[:50] + ("..." if len(text) > 50 else "")
             self.conv_mgr.rename_conversation(self.current_conv.id, title)
-            self._refresh_conversations()
+            # 注意：不要在这里调用 _refresh_conversations()，因为它会触发 _load_chat_history() 
+            # 导致聊天视图被清空，消息就显示不出来了
+            # 改为只更新列表中的标题，不重新加载聊天历史
+            for i in range(self.conv_list.count()):
+                item = self.conv_list.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == self.current_conv.id:
+                    item.setText(title)
+                    break
 
         attachments = self.pending_attachments.copy()
         user_msg = self.conv_mgr.add_message(
@@ -1266,23 +1292,39 @@ class MainWindow(QMainWindow):
         user_html = render_markdown(text)
         escaped = user_html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
         # #region agent log
-        _dlog("main_window.py:792", "runJS addMessage (send)", {"in_load_history": False, "escaped_len": len(escaped)}, "H2")
+        _dlog("main_window.py:792", "runJS addMessage (send)", {"in_load_history": False, "is_first_msg": is_first_message, "escaped_len": len(escaped)}, "H2")
         # #endregion
         
         # 确保 HTML 已加载后再添加消息 (修复新对话首条消息不显示问题)
         # 传递 uid 和 rawMarkdown 以支持复制功能
         escaped_raw = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
-        js_code = f"""
-            (function() {{
-                if (typeof addMessage === 'function' && document.getElementById('chat')) {{
-                    addMessage('user', '{escaped}', '', '{user_msg_uid}', '{escaped_raw}');
-                }} else {{
-                    setTimeout(function() {{
+        
+        # 如果是第一条消息，等待页面加载完成后再添加
+        if is_first_message:
+            js_code = f"""
+                (function() {{
+                    var checkAndAdd = function() {{
+                        if (typeof addMessage === 'function' && document.getElementById('chat')) {{
+                            addMessage('user', '{escaped}', '', '{user_msg_uid}', '{escaped_raw}');
+                        }} else {{
+                            setTimeout(checkAndAdd, 50);
+                        }}
+                    }};
+                    checkAndAdd();
+                }})();
+            """
+        else:
+            js_code = f"""
+                (function() {{
+                    if (typeof addMessage === 'function' && document.getElementById('chat')) {{
                         addMessage('user', '{escaped}', '', '{user_msg_uid}', '{escaped_raw}');
-                    }}, 100);
-                }}
-            }})();
-        """
+                    }} else {{
+                        setTimeout(function() {{
+                            addMessage('user', '{escaped}', '', '{user_msg_uid}', '{escaped_raw}');
+                        }}, 100);
+                    }}
+                }})();
+            """
         self.chat_view.page().runJavaScript(js_code)
 
         self.input_box.clear()
