@@ -191,16 +191,34 @@ class ConversationManager:
     # ── Private ────────────────────────────────────────
 
     def _row_to_conv(self, row) -> Conversation:
+        # 注意：sqlite3.Row 的 `in` 操作符检查的是值不是列名，所以不能使用 `in row` 检查
+        # 直接用 try-except 或者直接访问
+        rolling_summary = ""
+        if "rolling_summary" in row.keys():
+            rolling_summary = row["rolling_summary"] or ""
+        
+        last_compressed_msg_id = None
+        if "last_compressed_msg_id" in row.keys():
+            last_compressed_msg_id = row["last_compressed_msg_id"]
+        
+        summary_token_count = 0
+        if "summary_token_count" in row.keys() and row["summary_token_count"] is not None:
+            summary_token_count = row["summary_token_count"]
+        
+        compress_after_turns = 10
+        if "compress_after_turns" in row.keys() and row["compress_after_turns"] is not None:
+            compress_after_turns = row["compress_after_turns"]
+        
         return Conversation(
             id=row["id"], project_id=row["project_id"],
             title=row["title"], model_override=row["model_override"],
             created_at=row["created_at"], updated_at=row["updated_at"],
             is_archived=bool(row["is_archived"]),
             # 压缩相关字段 (PRD v3)
-            rolling_summary=row["rolling_summary"] if "rolling_summary" in row and row["rolling_summary"] else "",
-            last_compressed_msg_id=row["last_compressed_msg_id"] if "last_compressed_msg_id" in row and row["last_compressed_msg_id"] else None,
-            summary_token_count=row["summary_token_count"] if "summary_token_count" in row and row["summary_token_count"] is not None else 0,
-            compress_after_turns=row["compress_after_turns"] if "compress_after_turns" in row and row["compress_after_turns"] is not None else 10,
+            rolling_summary=rolling_summary,
+            last_compressed_msg_id=last_compressed_msg_id,
+            summary_token_count=summary_token_count,
+            compress_after_turns=compress_after_turns,
         )
 
     # ── Compression Methods ───────────────────────────

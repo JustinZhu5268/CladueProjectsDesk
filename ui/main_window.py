@@ -1255,10 +1255,11 @@ class MainWindow(QMainWindow):
             self._refresh_conversations()
 
         attachments = self.pending_attachments.copy()
-        self.conv_mgr.add_message(
+        user_msg = self.conv_mgr.add_message(
             self.current_conv.id, "user", text,
             attachments=[{"type": a["type"], "filename": a.get("filename", "")} for a in attachments],
         )
+        user_msg_uid = user_msg.id if user_msg else ""
 
         text_for_api = self._expand_uid_refs_in_message(text)
 
@@ -1269,13 +1270,15 @@ class MainWindow(QMainWindow):
         # #endregion
         
         # 确保 HTML 已加载后再添加消息 (修复新对话首条消息不显示问题)
+        # 传递 uid 和 rawMarkdown 以支持复制功能
+        escaped_raw = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
         js_code = f"""
             (function() {{
                 if (typeof addMessage === 'function' && document.getElementById('chat')) {{
-                    addMessage('user', '{escaped}', '');
+                    addMessage('user', '{escaped}', '', '{user_msg_uid}', '{escaped_raw}');
                 }} else {{
                     setTimeout(function() {{
-                        addMessage('user', '{escaped}', '');
+                        addMessage('user', '{escaped}', '', '{user_msg_uid}', '{escaped_raw}');
                     }}, 100);
                 }}
             }})();
