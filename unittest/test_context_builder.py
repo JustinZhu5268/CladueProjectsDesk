@@ -417,10 +417,10 @@ class TestCompactionParams(unittest.TestCase):
         
         params = builder.get_compaction_params("claude-sonnet-4-5-20250929")
         
-        self.assertIn("betas", params)
-        self.assertIn("compact-2026-01-12", params["betas"])
-        self.assertIn("context_management", params)
-        self.assertEqual(params["context_management"]["edits"][0]["trigger"]["value"], 160000)
+        # 注意：由于当前 Anthropic SDK 版本不支持 betas 参数在流式调用中，
+        # get_compaction_params 现在返回空字典
+        # 未来 SDK 更新后可能需要重新启用
+        self.assertEqual(params, {})
 
 
 class TestContextBuilderEdgeCases(unittest.TestCase):
