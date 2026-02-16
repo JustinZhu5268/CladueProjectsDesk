@@ -1410,30 +1410,41 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("正在整理历史记忆... (Haiku)", 3000)
         log.info("Starting background compression for conversation %s", self.current_conv.id[:8])
         
-        # 在后台线程执行压缩
-        self.compression_worker = CompressionWorker(
-            conversation_id=self.current_conv.id,
-            project_name=self.current_project.name,
-        )
-        self.compression_worker.run()  # 同步执行（因为 Haiku 很快）
+        # 使用 threading 异步执行压缩，避免阻塞 UI
+        import threading
         
-        result = self.compression_worker._result if hasattr(self.compression_worker, '_result') else None
+        def run_compression():
+            from core.context_compressor import ContextCompressor
+            compressor = ContextCompressor()
+            
+            if not compressor.should_compress(self.current_conv.id):
+                return
+            
+            try:
+                result = compressor.compress(self.current_conv.id, self.current_project.name)
+                
+                # 在主线程更新 UI
+                from PySide6.QtCore import QMetaObject, Qt
+                if result and result.success:
+                    saved = result.tokens_saved
+                    QMetaObject.invokeMethod(
+                        self.statusBar(), 
+                        "showMessage", 
+                        Qt.QueuedConnection,
+                        "".encode('utf-8'),
+                        "".encode('utf-8'),
+                        5000
+                    )
+                    log.info("Compression complete: saved %d tokens", saved)
+                else:
+                    error_msg = result.error if result else "Unknown error"
+                    log.warning("Compression failed: %s", error_msg)
+            except Exception as e:
+                log.exception("Compression failed")
         
-        if result and result.success:
-            saved = result.tokens_saved
-            self.statusBar().showMessage(
-                f"历史记忆已更新，节省 {saved:,} tokens" if saved > 0 else "历史记忆已更新",
-                5000
-            )
-            log.info("Compression complete: saved %d tokens", saved)
-        else:
-            error_msg = result.error if result else "Unknown error"
-            self.statusBar().setStyleSheet("background: #FFF3CD; color: #856404; font-weight: bold;")
-            self.statusBar().showMessage(f"⚠ 压缩服务不可用，正在使用全量上下文", 8000)
-            QTimer.singleShot(8000, lambda: self.statusBar().setStyleSheet(""))
-            log.warning("Compression failed: %s", error_msg)
-        
-        self.compression_worker = None
+        # 启动后台线程
+        compression_thread = threading.Thread(target=run_compression, daemon=True)
+        compression_thread.start()
 
     @Slot(str)
     def _on_stream_error(self, error_msg: str):
