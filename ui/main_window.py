@@ -1267,7 +1267,20 @@ class MainWindow(QMainWindow):
         # #region agent log
         _dlog("main_window.py:792", "runJS addMessage (send)", {"in_load_history": False, "escaped_len": len(escaped)}, "H2")
         # #endregion
-        self.chat_view.page().runJavaScript(f"addMessage('user', '{escaped}', '')")
+        
+        # 确保 HTML 已加载后再添加消息 (修复新对话首条消息不显示问题)
+        js_code = f"""
+            (function() {{
+                if (typeof addMessage === 'function' && document.getElementById('chat')) {{
+                    addMessage('user', '{escaped}', '');
+                }} else {{
+                    setTimeout(function() {{
+                        addMessage('user', '{escaped}', '');
+                    }}, 100);
+                }}
+            }})();
+        """
+        self.chat_view.page().runJavaScript(js_code)
 
         self.input_box.clear()
         self.pending_attachments.clear()
