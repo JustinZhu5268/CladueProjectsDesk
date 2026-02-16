@@ -94,14 +94,29 @@ MODELS: dict[str, ModelInfo] = {
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
-# Cache pricing multipliers
-CACHE_WRITE_MULTIPLIER = 1.25   # 1.25x base input price
-CACHE_READ_MULTIPLIER = 0.10    # 0.1x base input price
+# Cache pricing multipliers (5min default)
+CACHE_WRITE_MULTIPLIER_5M = 1.25   # 5分钟缓存写入乘数
+CACHE_WRITE_MULTIPLIER_1H = 2.0    # 1小时缓存写入乘数
+CACHE_READ_MULTIPLIER = 0.10       # 缓存读取乘数
 
 # ── Context Management ─────────────────────────────────
 MAX_HISTORY_TURNS = 40          # max message pairs before compression
 RESPONSE_TOKEN_RESERVE = 8192  # tokens reserved for model response
 CONTEXT_USAGE_THRESHOLD = 0.80 # trigger compression at 80% of context window
+
+# ── Compression Settings (PRD v3) ───────────────────────
+COMPRESS_AFTER_TURNS = 10       # 触发压缩的轮次 (默认 N=10)
+COMPRESS_BATCH_SIZE = 5         # 每次压缩的轮数 (默认 K=5)
+MAX_SUMMARY_TOKENS = 500        # 单次摘要最大 token 数
+SUMMARY_RECOMPRESS_THRESHOLD = 3000  # 摘要超过此阈值时重新压缩
+RECENT_TURNS_KEPT = 10          # 保留最近 N 轮完整对话
+
+# Cache TTL 选项
+CACHE_TTL_DEFAULT = "5m"       # 默认 5 分钟
+CACHE_TTL_1H = "1h"            # 1 小时选项
+
+# Compaction API
+COMPACTION_TRIGGER_TOKENS = 160000  # 触发服务端压缩的阈值 (200K * 80%)
 
 # ── UI Constants ───────────────────────────────────────
 SIDEBAR_WIDTH = 260

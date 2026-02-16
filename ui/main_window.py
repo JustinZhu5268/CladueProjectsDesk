@@ -44,6 +44,7 @@ from core.project_manager import ProjectManager, Project
 from core.conversation_manager import ConversationManager, Conversation, Message
 from core.document_processor import DocumentProcessor
 from core.context_builder import ContextBuilder
+from core.context_compressor import ContextCompressor, CompressionWorker
 from core.token_tracker import TokenTracker, UsageInfo
 from api.claude_client import ClaudeClient, StreamEvent
 from utils.key_manager import KeyManager
@@ -237,6 +238,7 @@ class MainWindow(QMainWindow):
         self.current_project: Project | None = None
         self.current_conv: Conversation | None = None
         self.worker: APIWorker | None = None
+        self.compression_worker: CompressionWorker | None = None  # PRD v3: 压缩工作线程
         self.is_streaming = False
         self._accumulated_thinking = ""
         self._inject_chat_history_connected = False
@@ -909,6 +911,9 @@ class MainWindow(QMainWindow):
         """, (self.current_conv.id,))
         
         cache_text = ""
+        compression_text = ""
+        
+        # 缓存统计
         if cache_stats and cache_stats[0]['total'] > 0:
             s = cache_stats[0]
             hit_rate = (s['hits'] / s['total']) * 100 if s['total'] > 0 else 0
@@ -920,12 +925,25 @@ class MainWindow(QMainWindow):
                 f"Saved: ~${cache_savings:.4f}"
             )
         
+        # PRD v3: 压缩统计
+        if self.current_conv:
+            compression_stats = self.conv_mgr.get_compression_stats(self.current_conv.id)
+            if compression_stats['has_summary']:
+                compression_text = (
+                    f"\n---\n"
+                    f"摘要: {compression_stats['summary_tokens']:,} tok\n"
+                    f"未压缩: {compression_stats['uncompressed_turns']} 轮"
+                )
+                if compression_stats['should_compress']:
+                    compression_text += " ⚡"
+        
         txt = (
             f"Messages: {stats['msg_count']}\n"
             f"Input: {stats['total_input']:,} tok\n"
             f"Output: {stats['total_output']:,} tok\n"
             f"Cost: ${stats['total_cost']:.4f}"
             f"{cache_text}"
+            f"{compression_text}"
         )
         self.stats_label.setText(txt)
 
@@ -1073,6 +1091,53 @@ class MainWindow(QMainWindow):
         self._update_stats()
         self.statusBar().showMessage(f"Done | UID: {msg_uid[:8]}" if msg_uid else "Done")
         log.info("Response complete: %s", meta)
+        
+        # PRD v3: 触发后台压缩 (异步)
+        self._trigger_compression()
+
+    def _trigger_compression(self):
+        """
+        触发后台压缩 (PRD v3 核心功能)
+        
+        在用户收到回复后异步执行，不阻塞主流程
+        """
+        if not self.current_conv or not self.current_project:
+            return
+        
+        compressor = ContextCompressor()
+        
+        # 检查是否需要压缩
+        if not compressor.should_compress(self.current_conv.id):
+            return
+        
+        # 显示压缩开始状态
+        self.statusBar().showMessage("正在整理历史记忆... (Haiku)", 3000)
+        log.info("Starting background compression for conversation %s", self.current_conv.id[:8])
+        
+        # 在后台线程执行压缩
+        self.compression_worker = CompressionWorker(
+            conversation_id=self.current_conv.id,
+            project_name=self.current_project.name,
+        )
+        self.compression_worker.run()  # 同步执行（因为 Haiku 很快）
+        
+        result = self.compression_worker._result if hasattr(self.compression_worker, '_result') else None
+        
+        if result and result.success:
+            saved = result.tokens_saved
+            self.statusBar().showMessage(
+                f"历史记忆已更新，节省 {saved:,} tokens" if saved > 0 else "历史记忆已更新",
+                5000
+            )
+            log.info("Compression complete: saved %d tokens", saved)
+        else:
+            error_msg = result.error if result else "Unknown error"
+            self.statusBar().setStyleSheet("background: #FFF3CD; color: #856404; font-weight: bold;")
+            self.statusBar().showMessage(f"⚠ 压缩服务不可用，正在使用全量上下文", 8000)
+            QTimer.singleShot(8000, lambda: self.statusBar().setStyleSheet(""))
+            log.warning("Compression failed: %s", error_msg)
+        
+        self.compression_worker = None
 
     @Slot(str)
     def _on_stream_error(self, error_msg: str):

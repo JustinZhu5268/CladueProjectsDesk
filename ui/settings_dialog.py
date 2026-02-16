@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from config import MODELS, DEFAULT_MODEL
+from config import MODELS, DEFAULT_MODEL, CACHE_TTL_DEFAULT, CACHE_TTL_1H
 from utils.key_manager import KeyManager
 from api.claude_client import ClaudeClient
 
@@ -117,6 +117,59 @@ class SettingsDialog(QDialog):
         gen_layout.addLayout(gen_form)
         gen_layout.addStretch()
         tabs.addTab(gen_tab, "General")
+
+        # ── Token Strategy Tab (PRD v3) ────────────────────
+        token_tab = QWidget()
+        token_layout = QVBoxLayout(token_tab)
+        
+        # Cache TTL 设置
+        cache_group = QGroupBox("Cache TTL (缓存有效期)")
+        cache_form = QFormLayout(cache_group)
+        
+        self.cache_ttl = QComboBox()
+        self.cache_ttl.addItem("5 分钟 (默认) - 更便宜，适合持续对话", "5m")
+        self.cache_ttl.addItem("1 小时 - 适合偶尔中断的工作节奏", "1h")
+        
+        cache_desc = QLabel(
+            "• 5分钟：持续对话时成本更低\n"
+            "• 1小时：经常超过5分钟空闲时更划算"
+        )
+        cache_desc.setStyleSheet("color: #666; font-size: 11px;")
+        
+        cache_form.addRow("缓存有效期:", self.cache_ttl)
+        cache_form.addRow("", cache_desc)
+        token_layout.addWidget(cache_group)
+        
+        # 压缩模式设置
+        compress_group = QGroupBox("Compression Mode (压缩模式)")
+        compress_form = QFormLayout(compress_group)
+        
+        self.compress_mode = QComboBox()
+        self.compress_mode.addItem("标准模式 (默认) - N=10, K=5", "standard")
+        self.compress_mode.addItem("保守模式 - N=20, K=5", "conservative")
+        
+        compress_desc = QLabel(
+            "• 标准模式：平衡成本与上下文质量\n"
+            "• 保守模式：保留更多完整上下文，适合代码调试"
+        )
+        compress_desc.setStyleSheet("color: #666; font-size: 11px;")
+        
+        compress_form.addRow("压缩策略:", self.compress_mode)
+        compress_form.addRow("", compress_desc)
+        token_layout.addWidget(compress_group)
+        
+        # 成本预估说明
+        cost_info = QLabel(
+            "💡 Token 优化原理：\n"
+            "• 缓存命中时，系统提示只付 10% 价格\n"
+            "• 对话摘要作为第二个缓存断点，再省 90%\n"
+            "• 增量压缩只处理最老的 K 轮，成本可预测"
+        )
+        cost_info.setStyleSheet("color: #888; font-size: 11px; padding: 10px;")
+        token_layout.addWidget(cost_info)
+        
+        token_layout.addStretch()
+        tabs.addTab(token_tab, "Token 策略")
 
         layout.addWidget(tabs)
 

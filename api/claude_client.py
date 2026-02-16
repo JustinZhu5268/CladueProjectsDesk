@@ -1,15 +1,18 @@
-"""Anthropic Claude API client with streaming and caching."""
+"""Anthropic Claude API client with streaming, caching and compression."""
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-from config import MODELS, DEFAULT_MODEL
+from config import MODELS, DEFAULT_MODEL, COMPACTION_TRIGGER_TOKENS
 from core.token_tracker import UsageInfo
 from data.database import db
 
 log = logging.getLogger(__name__)
+
+# Haiku 模型用于压缩 (最低成本)
+COMPRESS_MODEL = "claude-haiku-4-5-20251001"
 
 @dataclass
 class StreamEvent:
@@ -57,6 +60,7 @@ class ClaudeClient:
         thinking: dict | None = None,
         project_id: str = "",           # 新增：用于记录日志
         conversation_id: str = "",      # 新增：用于记录日志
+        use_compaction: bool = True,    # PRD v3: 是否使用 Compaction API 兜底
     ):
         """
         Send a message and yield StreamEvent objects.
@@ -89,6 +93,17 @@ class ClaudeClient:
                 kwargs["thinking"] = thinking
                 budget = thinking.get("budget_tokens", 1024)
                 kwargs["max_tokens"] = max(max_tokens, budget + 4096)
+            
+            # PRD v3: 添加 Compaction API 兜底参数
+            if use_compaction:
+                kwargs["betas"] = ["compact-2026-01-12"]
+                kwargs["context_management"] = {
+                    "edits": [{
+                        "type": "compact_20260112",
+                        "trigger": {"type": "input_tokens", "value": COMPACTION_TRIGGER_TOKENS}
+                    }]
+                }
+                log.debug("Compaction API enabled (trigger at %d tokens)", COMPACTION_TRIGGER_TOKENS)
 
             full_text = ""
             full_thinking = ""
@@ -193,3 +208,87 @@ class ClaudeClient:
             return False, f"Connection failed: {e}"
         except Exception as e:
             return False, f"Error: {e}"
+
+    def compress(
+        self,
+        conversation_turns: str,
+        existing_summary: str,
+        project_name: str = "Project",
+    ) -> tuple[str, UsageInfo | None]:
+        """
+        使用 Haiku 模型压缩对话历史 (PRD v3)
+        
+        这是一个同步调用方法，用于在后台线程中执行压缩。
+        
+        Args:
+            conversation_turns: 待压缩的对话内容
+            existing_summary: 现有的摘要 (如果有)
+            project_name: 项目名称
+            
+        Returns:
+            (summary_text, usage_info)
+        """
+        if not self.is_configured:
+            raise RuntimeError("API client not configured for compression")
+        
+        log.info("Starting compression with model %s", COMPRESS_MODEL)
+        
+        # 构建压缩提示
+        system_prompt = (
+            f"You are a conversation summarizer for project '{project_name}'. "
+            "Output ONLY the summary in the same language as the conversation. "
+            "No preamble, no explanation."
+        )
+        
+        user_prompt = f"""请将以下对话压缩为简洁摘要。规则：
+1. 保留所有关键决策和结论
+2. 保留代码片段的函数签名和核心逻辑（不要只用自然语言概括代码）
+3. 保留数据点、技术细节，专业术语原文
+4. 保留用户偏好和约束条件
+5. 删除客套、闲聊、重复内容
+6. 摘要长度控制在 500 tokens 以内
+
+现有摘要:
+{existing_summary if existing_summary else '(无)'}
+
+新对话内容:
+{conversation_turns}"""
+        
+        try:
+            import anthropic
+            
+            # 同步调用 (非流式)
+            response = self._client.messages.create(
+                model=COMPRESS_MODEL,
+                max_tokens=500,
+                system=[{"type": "text", "text": system_prompt}],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            
+            # 提取响应文本
+            summary = ""
+            usage = None
+            
+            if response.content:
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        summary = block.text
+                        break
+            
+            # 提取 usage
+            if hasattr(response, "usage") and response.usage:
+                u = response.usage
+                usage = UsageInfo(
+                    input_tokens=getattr(u, "input_tokens", 0),
+                    output_tokens=getattr(u, "output_tokens", 0),
+                )
+                log.info(
+                    "Compression complete: %d input -> %d output tokens",
+                    usage.input_tokens, usage.output_tokens
+                )
+            
+            return summary.strip(), usage
+            
+        except Exception as e:
+            log.exception("Compression failed")
+            raise

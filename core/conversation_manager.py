@@ -38,6 +38,11 @@ class Conversation:
     created_at: str = ""
     updated_at: str = ""
     is_archived: bool = False
+    # 压缩相关字段 (PRD v3)
+    rolling_summary: str = ""
+    last_compressed_msg_id: str | None = None
+    summary_token_count: int = 0
+    compress_after_turns: int = 10
 
 
 class ConversationManager:
@@ -51,15 +56,16 @@ class ConversationManager:
         cid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         db.execute(
-            """INSERT INTO conversations (id, project_id, title, model_override, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (cid, project_id, title, model_override, now, now),
+            """INSERT INTO conversations (id, project_id, title, model_override, created_at, updated_at, compress_after_turns)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (cid, project_id, title, model_override, now, now, 10),
         )
         # Touch project updated_at
         db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id))
         log.info("Created conversation '%s' in project %s", title, project_id[:8])
         return Conversation(id=cid, project_id=project_id, title=title,
-                            model_override=model_override, created_at=now, updated_at=now)
+                            model_override=model_override, created_at=now, updated_at=now,
+                            compress_after_turns=10)
 
     def get_conversation(self, conv_id: str) -> Conversation | None:
         row = db.execute_one("SELECT * FROM conversations WHERE id = ?", (conv_id,))
@@ -190,7 +196,72 @@ class ConversationManager:
             title=row["title"], model_override=row["model_override"],
             created_at=row["created_at"], updated_at=row["updated_at"],
             is_archived=bool(row["is_archived"]),
+            # 压缩相关字段 (PRD v3)
+            rolling_summary=row.get("rolling_summary") or "",
+            last_compressed_msg_id=row.get("last_compressed_msg_id"),
+            summary_token_count=row.get("summary_token_count") or 0,
+            compress_after_turns=row.get("compress_after_turns") or 10,
         )
+
+    # ── Compression Methods ───────────────────────────
+
+    def update_rolling_summary(self, conversation_id: str, summary: str, 
+                                last_msg_id: str, token_count: int) -> None:
+        """更新对话的滚动摘要"""
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            """UPDATE conversations 
+               SET rolling_summary = ?, last_compressed_msg_id = ?, 
+                   summary_token_count = ?, updated_at = ?
+               WHERE id = ?""",
+            (summary, last_msg_id, token_count, now, conversation_id),
+        )
+        log.debug("Updated rolling summary for conv %s: %d tokens", 
+                  conversation_id[:8], token_count)
+
+    def reset_rolling_summary(self, conversation_id: str) -> None:
+        """重置对话摘要（清除所有压缩历史）"""
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            """UPDATE conversations 
+               SET rolling_summary = '', last_compressed_msg_id = NULL, 
+                   summary_token_count = 0, updated_at = ?
+               WHERE id = ?""",
+            (now, conversation_id),
+        )
+        log.info("Reset rolling summary for conversation %s", conversation_id[:8])
+
+    def get_uncompressed_messages(self, conversation_id: str) -> list[Message]:
+        """获取未压缩的消息（用于压缩）"""
+        conv = self.get_conversation(conversation_id)
+        if not conv or not conv.last_compressed_msg_id:
+            return self.get_messages(conversation_id)
+        
+        # 返回 last_compressed_msg_id 之后的消息
+        all_msgs = self.get_messages(conversation_id)
+        for i, msg in enumerate(all_msgs):
+            if msg.id == conv.last_compressed_msg_id:
+                return all_msgs[i+1:]
+        return all_msgs
+
+    def get_compression_stats(self, conversation_id: str) -> dict:
+        """获取对话的压缩统计信息"""
+        conv = self.get_conversation(conversation_id)
+        if not conv:
+            return {"has_summary": False, "summary_tokens": 0, "uncompressed_count": 0}
+        
+        uncompressed = self.get_uncompressed_messages(conversation_id)
+        # 每条消息算一轮 (user + assistant 算2条消息)
+        turns = len(uncompressed) // 2
+        
+        return {
+            "has_summary": bool(conv.rolling_summary),
+            "summary_tokens": conv.summary_token_count,
+            "uncompressed_count": len(uncompressed),
+            "uncompressed_turns": turns,
+            "compress_after_turns": conv.compress_after_turns,
+            "should_compress": turns >= conv.compress_after_turns,
+        }
 
     def _row_to_msg(self, row) -> Message:
         att = []

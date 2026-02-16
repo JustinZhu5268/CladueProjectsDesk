@@ -11,7 +11,7 @@ from config import DB_PATH
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2  # 版本升级
+SCHEMA_VERSION = 3  # 版本升级 v3 - 添加压缩字段
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     is_archived INTEGER NOT NULL DEFAULT 0,
+    -- 压缩相关字段 (PRD v3)
+    rolling_summary TEXT DEFAULT '',
+    last_compressed_msg_id TEXT,
+    summary_token_count INTEGER DEFAULT 0,
+    compress_after_turns INTEGER DEFAULT 10,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -197,6 +202,14 @@ class Database:
             self.execute("CREATE INDEX IF NOT EXISTS idx_api_log_project ON api_call_log(project_id, created_at DESC)")
             self.execute("CREATE INDEX IF NOT EXISTS idx_api_log_conversation ON api_call_log(conversation_id, created_at DESC)")
             log.info("Migration to v2: Added api_call_log table")
+        
+        if from_ver < 3:
+            # 添加压缩相关字段 (PRD v3)
+            self.execute("ALTER TABLE conversations ADD COLUMN rolling_summary TEXT DEFAULT ''")
+            self.execute("ALTER TABLE conversations ADD COLUMN last_compressed_msg_id TEXT")
+            self.execute("ALTER TABLE conversations ADD COLUMN summary_token_count INTEGER DEFAULT 0")
+            self.execute("ALTER TABLE conversations ADD COLUMN compress_after_turns INTEGER DEFAULT 10")
+            log.info("Migration to v3: Added compression fields to conversations table")
 
     def close(self) -> None:
         """Close the database connection."""
