@@ -1644,3 +1644,17 @@
 {"id": "log_1771244587785", "timestamp": 1771244587785, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 28}, "hypothesisId": "H2"}
 {"id": "log_1771244639028", "timestamp": 1771244639028, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 19}, "hypothesisId": "H2"}
 {"id": "log_1771244887759", "timestamp": 1771244887759, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 42}, "hypothesisId": "H2"}
+{"id": "log_1771245506638", "timestamp": 1771245506638, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 36}, "hypothesisId": "H2"}
+{"id": "log_1771245536159", "timestamp": 1771245536159, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 36}, "hypothesisId": "H2"}
+{"id": "log_1771245549662", "timestamp": 1771245549662, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 36}, "hypothesisId": "H2"}
+{"id": "log_1771245557904", "timestamp": 1771245557904, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 36}, "hypothesisId": "H2"}
+{"id": "log_1771245575660", "timestamp": 1771245575660, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 36}, "hypothesisId": "H2"}
+{"id": "log_1771245617495", "timestamp": 1771245617495, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 37}, "hypothesisId": "H2"}
+{"id": "log_1771245639757", "timestamp": 1771245639757, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 36}, "hypothesisId": "H2"}
+{"id": "log_1771245667224", "timestamp": 1771245667224, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 37}, "hypothesisId": "H2"}
+{"id": "log_1771245693541", "timestamp": 1771245693541, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 37}, "hypothesisId": "H2"}
+{"id": "log_1771245730314", "timestamp": 1771245730314, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
+{"id": "log_1771245776236", "timestamp": 1771245776236, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
+{"id": "log_1771245796688", "timestamp": 1771245796688, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
+{"id": "log_1771245812631", "timestamp": 1771245812631, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
+{"id": "log_1771245862397", "timestamp": 1771245862397, "location": "main_window.py:792", "message": "runJS addMessage (send)", "data": {"in_load_history": false, "escaped_len": 71}, "hypothesisId": "H2"}
